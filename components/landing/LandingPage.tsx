@@ -1,6 +1,4 @@
-
 'use client';
-
 import React, { useState, useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -44,20 +42,98 @@ import { motion } from 'framer-motion';
 import WhatsAppChat from './WhatsAppChat';
 import { useScrollToSection } from '@/hooks/useScrollToSection';
 
-// Componente Hero Section
+// === Checkout Button Integrado ===
+const CheckoutButton = ({ plan, children, variant = 'default' }) => {
+  const [email, setEmail] = useState('');
+  const [showEmailForm, setShowEmailForm] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleStartCheckout = async () => {
+    if (!email) {
+      setError('Por favor ingresa tu email');
+      return;
+    }
+    if (!/\S+@\S+\.\S+/.test(email)) {
+      setError('Email inválido');
+      return;
+    }
+    setError('');
+    setIsProcessing(true);
+
+    try {
+      const res = await fetch('/api/create-checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan, email })
+      });
+      const { url } = await res.json();
+      if (url) {
+        window.location.href = url;
+      } else {
+        setError('Error al procesar el pago');
+      }
+    } catch (err) {
+      setError('No se pudo conectar al sistema de pagos');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  return (
+    <div>
+      <Button
+        className={variant === 'outline' ? 'border-white text-white hover:bg-white hover:text-black' : 'bg-white text-black hover:bg-white/90'}
+        onClick={() => setShowEmailForm(true)}
+        disabled={isProcessing}
+      >
+        {isProcessing ? 'Procesando...' : children}
+      </Button>
+
+      {showEmailForm && (
+        <div className="mt-4 p-4 bg-white/20 backdrop-blur-sm rounded-lg border border-white/30">
+          <Label htmlFor="checkout-email" className="text-white">Tu correo profesional</Label>
+          <Input
+            id="checkout-email"
+            type="email"
+            placeholder="tu@clinicadental.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="mb-2 bg-white/80"
+          />
+          {error && <p className="text-red-300 text-sm mb-2">{error}</p>}
+          <div className="flex gap-2">
+            <Button
+              onClick={handleStartCheckout}
+              disabled={isProcessing}
+              className="bg-white text-black"
+            >
+              {isProcessing ? 'Redirigiendo...' : 'Pagar y Activar'}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setShowEmailForm(false)}
+              className="text-white border-white/50"
+            >
+              Cancelar
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// === Hero Section ===
 const HeroSection = () => {
   const scrollToSection = useScrollToSection();
-  
   return (
     <section className="min-h-screen smile360-gradient text-white relative overflow-hidden">
-      {/* Background Pattern */}
       <div className="absolute inset-0 opacity-10">
         <div className="w-full h-full bg-gradient-to-br from-white/5 to-white/10"></div>
       </div>
-      
       <div className="container mx-auto px-4 py-20 relative z-10">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-          {/* Content */}
           <motion.div
             initial={{ opacity: 0, x: -50 }}
             animate={{ opacity: 1, x: 0 }}
@@ -76,12 +152,10 @@ const HeroSection = () => {
                 </span>
               </h1>
             </div>
-            
             <p className="text-xl text-black/80 leading-relaxed">
               La plataforma integral que revoluciona la gestión de clínicas dentales. 
               Desde la agenda hasta los reportes financieros, todo en una plataforma.
             </p>
-
             <div className="flex flex-col sm:flex-row gap-4">
               <Button 
                 size="lg" 
@@ -91,20 +165,11 @@ const HeroSection = () => {
                 <Play className="mr-2 h-5 w-5 group-hover:scale-110 transition-transform" />
                 Ver Demo Interactivo
               </Button>
-              <Button 
-                size="lg" 
-                variant="outline" 
-                className="border-white text-white hover:bg-white hover:text-black smile360-transition" 
-                asChild
-              >
-                <Link href="/auth/register">
-                  Probar 14 días gratis
-                  <ArrowRight className="ml-2 h-5 w-5" />
-                </Link>
-              </Button>
+              <CheckoutButton plan="basic" variant="outline">
+                Probar 14 días gratis
+                <ArrowRight className="ml-2 h-5 w-5" />
+              </CheckoutButton>
             </div>
-
-            {/* Stats */}
             <div className="flex flex-col sm:flex-row gap-6 pt-8">
               <div className="text-center sm:text-left">
                 <div className="text-3xl font-bold text-black">500+</div>
@@ -120,8 +185,6 @@ const HeroSection = () => {
               </div>
             </div>
           </motion.div>
-
-          {/* Hero Image */}
           <motion.div
             initial={{ opacity: 0, x: 50 }}
             animate={{ opacity: 1, x: 0 }}
@@ -138,8 +201,6 @@ const HeroSection = () => {
               />
               <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent"></div>
             </div>
-            
-            {/* Floating cards */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -163,10 +224,9 @@ const HeroSection = () => {
   );
 };
 
-// Demo Interactivo
+// === Interactive Demo ===
 const InteractiveDemo = () => {
   const [activeModule, setActiveModule] = useState('agenda');
-
   const modules = {
     agenda: {
       title: 'Agenda Inteligente',
@@ -267,8 +327,6 @@ const InteractiveDemo = () => {
             la operación de tu clínica dental con tecnología de vanguardia
           </p>
         </div>
-
-        {/* Plan Tabs */}
         <div className="flex justify-center mb-8">
           <div className="inline-flex bg-white rounded-lg p-1 shadow-sm">
             <button className="px-4 py-2 bg-gradient-to-r from-yellow-400 to-yellow-500 text-black rounded-md text-sm font-medium">
@@ -282,9 +340,7 @@ const InteractiveDemo = () => {
             </button>
           </div>
         </div>
-
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Module Selector */}
           <div className="space-y-4 max-h-96 overflow-y-auto">
             {Object.entries(modules).slice(0, 6).map(([key, module]) => {
               const IconComponent = module.icon;
@@ -313,8 +369,6 @@ const InteractiveDemo = () => {
               );
             })}
           </div>
-
-          {/* Demo Preview */}
           <div className="lg:col-span-2">
             <Card className="h-full smile360-card">
               <CardContent className="p-6">
@@ -337,8 +391,6 @@ const InteractiveDemo = () => {
                     {modules[activeModule].description}
                   </p>
                 </div>
-
-                {/* Demo mockup */}
                 <div className="aspect-video smile360-gradient-subtle rounded-lg flex items-center justify-center mb-6 border border-yellow-200">
                   <div className="text-center">
                     <div className="w-16 h-16 smile360-gradient rounded-full flex items-center justify-center mx-auto mb-4">
@@ -351,8 +403,6 @@ const InteractiveDemo = () => {
                     </Button>
                   </div>
                 </div>
-
-                {/* Features */}
                 <div className="space-y-3">
                   <h4 className="font-semibold text-gray-800 mb-3">Características principales:</h4>
                   {modules[activeModule].features.map((feature, index) => (
@@ -366,7 +416,6 @@ const InteractiveDemo = () => {
             </Card>
           </div>
         </div>
-        
         <div className="text-center mt-12">
           <p className="text-gray-600 mb-4">
             ¿Quieres ver todos los módulos disponibles?
@@ -383,10 +432,9 @@ const InteractiveDemo = () => {
   );
 };
 
-// Comparador de Planes
+// === Pricing Comparison ===
 const PricingComparison = () => {
   const [billingCycle, setBillingCycle] = useState('monthly');
-
   const plans = {
     basic: {
       name: 'Básico',
@@ -468,8 +516,6 @@ const PricingComparison = () => {
           <p className="text-xl text-gray-600 max-w-3xl mx-auto mb-8">
             Comienza con 14 días gratuitos. Sin compromiso, sin tarjeta de crédito.
           </p>
-
-          {/* Billing Toggle */}
           <div className="inline-flex items-center smile360-bg-light rounded-lg p-1 border border-yellow-200">
             <button
               onClick={() => setBillingCycle('monthly')}
@@ -496,13 +542,11 @@ const PricingComparison = () => {
             </button>
           </div>
         </div>
-
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
           {Object.entries(plans).map(([key, plan]) => {
             const IconComponent = plan.icon;
             const price = billingCycle === 'monthly' ? plan.monthly : plan.yearly;
             const saveAmount = billingCycle === 'yearly' ? (plan.monthly * 12 - plan.yearly) : 0;
-            
             return (
               <Card 
                 key={key}
@@ -519,7 +563,6 @@ const PricingComparison = () => {
                     </Badge>
                   </div>
                 )}
-
                 <CardHeader className="text-center pb-8">
                   <div className={`w-12 h-12 mx-auto mb-4 rounded-lg flex items-center justify-center ${
                     plan.popular ? 'smile360-gradient text-black' : 'bg-gray-100'
@@ -528,7 +571,6 @@ const PricingComparison = () => {
                   </div>
                   <h3 className="text-xl font-bold">{plan.name}</h3>
                   <p className="text-gray-600 text-sm">{plan.description}</p>
-                  
                   <div className="mt-4">
                     <div className="text-3xl font-bold">
                       ${price}
@@ -543,7 +585,6 @@ const PricingComparison = () => {
                     )}
                   </div>
                 </CardHeader>
-
                 <CardContent>
                   <ul className="space-y-3 mb-6">
                     {plan.features.map((feature, index) => (
@@ -553,25 +594,14 @@ const PricingComparison = () => {
                       </li>
                     ))}
                   </ul>
-
-                  <Button 
-                    className={`w-full smile360-transition ${
-                      plan.popular 
-                        ? 'smile360-button text-black' 
-                        : 'bg-gray-800 hover:bg-gray-900 text-white'
-                    }`}
-                    asChild
-                  >
-                    <Link href="/auth/register">
-                      Probar 14 días gratis
-                    </Link>
-                  </Button>
+                  <CheckoutButton plan={key}>
+                    Probar 14 días gratis
+                  </CheckoutButton>
                 </CardContent>
               </Card>
             );
           })}
         </div>
-
         <div className="text-center mt-12">
           <p className="text-gray-600 mb-4">
             ¿Necesitas más información? 
@@ -585,7 +615,7 @@ const PricingComparison = () => {
   );
 };
 
-// Casos de Éxito y Testimonios
+// === Testimonials ===
 const TestimonialsSection = () => {
   const testimonials = [
     {
@@ -639,24 +669,18 @@ const TestimonialsSection = () => {
             sus operaciones diarias y hacer crecer su negocio
           </p>
         </div>
-
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
           {testimonials.map((testimonial, index) => (
             <Card key={index} className="smile360-card bg-white hover:smile360-shadow-lg smile360-transition">
               <CardContent className="p-6">
-                {/* Rating */}
                 <div className="flex items-center mb-4">
                   {[...Array(testimonial.rating)].map((_, i) => (
                     <Star key={i} className="w-4 h-4 smile360-text-primary fill-current" />
                   ))}
                 </div>
-
-                {/* Content */}
                 <blockquote className="text-gray-700 mb-6 italic">
                   "{testimonial.content}"
                 </blockquote>
-
-                {/* Metrics */}
                 <div className="grid grid-cols-3 gap-4 mb-6 p-4 smile360-bg-light rounded-lg border border-yellow-100">
                   {Object.entries(testimonial.metrics).map(([key, value], idx) => (
                     <div key={idx} className="text-center">
@@ -667,8 +691,6 @@ const TestimonialsSection = () => {
                     </div>
                   ))}
                 </div>
-
-                {/* Author */}
                 <div className="flex items-center">
                   <div className="relative w-12 h-12 rounded-full overflow-hidden mr-4 border-2 border-yellow-200">
                     <Image
@@ -692,7 +714,7 @@ const TestimonialsSection = () => {
   );
 };
 
-// Calculadora de ROI
+// === ROI Calculator ===
 const ROICalculator = () => {
   const [formData, setFormData] = useState({
     patients: '',
@@ -708,16 +730,13 @@ const ROICalculator = () => {
     const hoursPerWeek = parseFloat(formData.hoursPerWeek) || 0;
     const currentCost = parseFloat(formData.currentSoftwareCost) || 0;
 
-    // Assumptions for calculations
-    const timeReduction = 0.3; // 30% time reduction
-    const patientIncrease = 0.15; // 15% patient increase
-    const smile360Cost = 59; // Pro plan monthly
-
+    const timeReduction = 0.3;
+    const patientIncrease = 0.15;
+    const smile360Cost = 59;
     const monthlyRevenue = patients * avgVisitValue;
-    const timeSavings = hoursPerWeek * 4 * 25; // Hours saved per month * hourly rate
+    const timeSavings = hoursPerWeek * 4 * 25;
     const additionalRevenue = monthlyRevenue * patientIncrease;
     const costSavings = currentCost - smile360Cost;
-    
     const totalMonthlySavings = timeSavings + additionalRevenue + costSavings;
     const yearlyROI = (totalMonthlySavings * 12) / (smile360Cost * 12) * 100;
 
@@ -742,10 +761,8 @@ const ROICalculator = () => {
             Descubre cuánto puede ahorrar y generar tu clínica con Smile360
           </p>
         </div>
-
         <div className="max-w-4xl mx-auto">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            {/* Calculator Form */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -767,7 +784,6 @@ const ROICalculator = () => {
                     onChange={(e) => setFormData(prev => ({...prev, patients: e.target.value}))}
                   />
                 </div>
-
                 <div>
                   <Label htmlFor="avgVisitValue">Valor promedio por consulta ($)</Label>
                   <Input
@@ -778,7 +794,6 @@ const ROICalculator = () => {
                     onChange={(e) => setFormData(prev => ({...prev, avgVisitValue: e.target.value}))}
                   />
                 </div>
-
                 <div>
                   <Label htmlFor="hoursPerWeek">Horas administrativas por semana</Label>
                   <Input
@@ -789,7 +804,6 @@ const ROICalculator = () => {
                     onChange={(e) => setFormData(prev => ({...prev, hoursPerWeek: e.target.value}))}
                   />
                 </div>
-
                 <div>
                   <Label htmlFor="currentSoftwareCost">Costo actual de software ($)</Label>
                   <Input
@@ -800,7 +814,6 @@ const ROICalculator = () => {
                     onChange={(e) => setFormData(prev => ({...prev, currentSoftwareCost: e.target.value}))}
                   />
                 </div>
-
                 <Button 
                   onClick={calculateROI}
                   className="w-full"
@@ -811,8 +824,6 @@ const ROICalculator = () => {
                 </Button>
               </CardContent>
             </Card>
-
-            {/* Results */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -833,7 +844,6 @@ const ROICalculator = () => {
                         </div>
                         <div className="text-sm text-gray-600">Ahorro en tiempo/mes</div>
                       </div>
-                      
                       <div className="text-center p-4 bg-blue-50 rounded-lg">
                         <div className="text-2xl font-bold text-blue-600">
                           ${results.additionalRevenue?.toLocaleString()}
@@ -841,13 +851,11 @@ const ROICalculator = () => {
                         <div className="text-sm text-gray-600">Ingresos adicionales/mes</div>
                       </div>
                     </div>
-
                     <div className="text-center p-6 bg-gradient-to-r from-blue-500 to-purple-600 rounded-lg text-white">
                       <div className="text-3xl font-bold">
                         ${results.totalMonthlySavings?.toLocaleString()}
                       </div>
                       <div className="text-blue-100">Beneficio total mensual</div>
-                      
                       <div className="mt-4 pt-4 border-t border-white/20">
                         <div className="text-xl font-bold">
                           ROI: {results.yearlyROI?.toFixed(0)}%
@@ -855,14 +863,11 @@ const ROICalculator = () => {
                         <div className="text-blue-100">Retorno anual sobre inversión</div>
                       </div>
                     </div>
-
                     <div className="text-center">
-                      <Button asChild size="lg" className="bg-green-600 hover:bg-green-700">
-                        <Link href="/auth/register">
-                          <CheckCircle className="w-4 h-4 mr-2" />
-                          Comenzar mi prueba gratuita
-                        </Link>
-                      </Button>
+                      <CheckoutButton plan="pro">
+                        <CheckCircle className="w-4 h-4 mr-2" />
+                        Comenzar mi prueba gratuita
+                      </CheckoutButton>
                     </div>
                   </div>
                 ) : (
@@ -880,7 +885,7 @@ const ROICalculator = () => {
   );
 };
 
-// Chat en vivo / WhatsApp
+// === Contact Section ===
 const ContactSection = () => {
   const [formData, setFormData] = useState({
     name: '',
@@ -901,9 +906,7 @@ const ContactSection = () => {
             Nuestro equipo está aquí para ayudarte. Contáctanos por el medio que prefieras.
           </p>
         </div>
-
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 max-w-6xl mx-auto">
-          {/* Contact Info */}
           <div className="space-y-8">
             <div>
               <h3 className="text-2xl font-bold mb-6">Habla con Nuestro Equipo</h3>
@@ -912,7 +915,6 @@ const ContactSection = () => {
                 el plan perfecto para tu clínica.
               </p>
             </div>
-
             <div className="space-y-6">
               <div className="flex items-start gap-4">
                 <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
@@ -930,7 +932,6 @@ const ContactSection = () => {
                   </Button>
                 </div>
               </div>
-
               <div className="flex items-start gap-4">
                 <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
                   <Phone className="w-6 h-6 text-blue-600" />
@@ -941,7 +942,6 @@ const ContactSection = () => {
                   <p className="text-sm text-gray-500">Lun - Vie, 9:00 AM - 6:00 PM</p>
                 </div>
               </div>
-
               <div className="flex items-start gap-4">
                 <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
                   <Mail className="w-6 h-6 text-purple-600" />
@@ -953,8 +953,6 @@ const ContactSection = () => {
                 </div>
               </div>
             </div>
-
-            {/* Quick Stats */}
             <div className="bg-gray-50 rounded-lg p-6">
               <h4 className="font-semibold mb-4">¿Por qué elegir Smile360?</h4>
               <div className="grid grid-cols-2 gap-4">
@@ -977,8 +975,6 @@ const ContactSection = () => {
               </div>
             </div>
           </div>
-
-          {/* Contact Form */}
           <Card>
             <CardHeader>
               <CardTitle>Solicita una Demo Personalizada</CardTitle>
@@ -1008,7 +1004,6 @@ const ContactSection = () => {
                     />
                   </div>
                 </div>
-
                 <div>
                   <Label htmlFor="email">Email</Label>
                   <Input
@@ -1019,7 +1014,6 @@ const ContactSection = () => {
                     onChange={(e) => setFormData(prev => ({...prev, email: e.target.value}))}
                   />
                 </div>
-
                 <div>
                   <Label htmlFor="message">Cuéntanos sobre tu clínica</Label>
                   <Textarea
@@ -1030,12 +1024,10 @@ const ContactSection = () => {
                     onChange={(e) => setFormData(prev => ({...prev, message: e.target.value}))}
                   />
                 </div>
-
                 <Button type="submit" className="w-full" size="lg">
                   <Calendar className="w-4 h-4 mr-2" />
                   Solicitar Demo Gratuita
                 </Button>
-
                 <p className="text-xs text-gray-500 text-center">
                   Al enviar este formulario aceptas nuestra política de privacidad. 
                   No compartimos tu información con terceros.
@@ -1049,13 +1041,11 @@ const ContactSection = () => {
   );
 };
 
-// Landing Page Component Principal
+// === Landing Page Principal ===
 const LandingPage = () => {
   const scrollToSection = useScrollToSection();
-
   return (
     <div className="min-h-screen">
-      {/* Navigation */}
       <nav className="fixed top-0 w-full bg-white/95 backdrop-blur-sm z-50 border-b smile360-shadow">
         <div className="container mx-auto px-4 py-3">
           <div className="flex items-center justify-between">
@@ -1065,7 +1055,6 @@ const LandingPage = () => {
               </div>
               <span className="text-xl font-bold smile360-text-primary">Smile360</span>
             </div>
-
             <div className="hidden md:flex items-center gap-8">
               <button 
                 onClick={() => scrollToSection('demo')} 
@@ -1092,34 +1081,25 @@ const LandingPage = () => {
                 Contacto
               </button>
             </div>
-
             <div className="flex items-center gap-3">
               <Button variant="ghost" className="hover:smile360-bg-light smile360-transition" asChild>
                 <Link href="/auth/signin">Iniciar Sesión</Link>
               </Button>
-              <Button className="smile360-button" asChild>
-                <Link href="/auth/register">Prueba Gratis</Link>
-              </Button>
+              <CheckoutButton plan="basic">
+                Prueba Gratis
+              </CheckoutButton>
             </div>
           </div>
         </div>
       </nav>
 
-      {/* Sections */}
       <HeroSection />
-      <div id="demo">
-        <InteractiveDemo />
-      </div>
-      <div id="pricing">
-        <PricingComparison />
-      </div>
-      <div id="testimonials">
-        <TestimonialsSection />
-      </div>
+      <div id="demo"><InteractiveDemo /></div>
+      <div id="pricing"><PricingComparison /></div>
+      <div id="testimonials"><TestimonialsSection /></div>
       <ROICalculator />
       <ContactSection />
 
-      {/* Footer */}
       <footer className="bg-gray-900 text-white py-12">
         <div className="container mx-auto px-4">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
@@ -1134,7 +1114,6 @@ const LandingPage = () => {
                 El sistema integral de gestión 360° para clínicas dentales modernas.
               </p>
             </div>
-
             <div>
               <h4 className="font-semibold mb-4">Producto</h4>
               <ul className="space-y-2 text-gray-400">
@@ -1144,7 +1123,6 @@ const LandingPage = () => {
                 <li><Link href="#" className="hover:text-white">API</Link></li>
               </ul>
             </div>
-
             <div>
               <h4 className="font-semibold mb-4">Soporte</h4>
               <ul className="space-y-2 text-gray-400">
@@ -1154,7 +1132,6 @@ const LandingPage = () => {
                 <li><Link href="#" className="hover:text-white">Estado del Sistema</Link></li>
               </ul>
             </div>
-
             <div>
               <h4 className="font-semibold mb-4">Empresa</h4>
               <ul className="space-y-2 text-gray-400">
@@ -1165,14 +1142,12 @@ const LandingPage = () => {
               </ul>
             </div>
           </div>
-
           <div className="border-t border-gray-800 mt-8 pt-8 text-center text-gray-400">
             <p>&copy; 2025 Smile360. Todos los derechos reservados.</p>
           </div>
         </div>
       </footer>
 
-      {/* WhatsApp Chat Component */}
       <WhatsAppChat />
     </div>
   );
