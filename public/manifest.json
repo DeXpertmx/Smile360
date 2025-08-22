@@ -1,0 +1,30 @@
+
+{
+  "name": "Smile360 - Sistema de Gestión Dental",
+  "short_name": "Smile360",
+  "description": "Plataforma completa de gestión 360° para clínicas dentales modernas",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FDF8E8",
+  "theme_color": "#D4AF37",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["medical", "business", "productivity"],
+  "lang": "es",
+  "dir": "ltr",
+  "scope": "/",
+  "prefer_related_applications": false
+}

@@ -1,0 +1,3036 @@
+
+
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+    provider = "prisma-client-js"
+    binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x"]
+    output = "/home/ubuntu/smilesys/app/node_modules/.prisma/client"
+}
+
+datasource db {
+    provider = "postgresql"
+    url      = env("DATABASE_URL")
+}
+
+// =============================================
+// MULTI-TENANCY MODELS
+// =============================================
+
+model Organization {
+  id                String   @id @default(cuid())
+  name              String   // Nombre de la clínica
+  slug              String   @unique // URL-friendly identifier
+  
+  // Información de contacto
+  email             String   @unique
+  phone             String?
+  website           String?
+  
+  // Dirección
+  address           String?
+  city              String?
+  state             String?
+  zipCode           String?
+  country           String   @default("MX")
+  timezone          String   @default("America/Mexico_City")
+  
+  // Configuración
+  currency          String   @default("MXN")
+  language          String   @default("es")
+  logo              String?  // URL del logo
+  
+  // Plan y facturación
+  plan              String   @default("basic") // basic, pro, enterprise
+  status            String   @default("trial") // trial, active, suspended, cancelled
+  trialEndsAt       DateTime?
+  subscriptionId    String?  // ID de suscripción en Stripe
+  stripeCustomerId  String?  @unique // Customer ID en Stripe
+  stripePriceId     String?  // Price ID del plan activo en Stripe
+  billingCycle      String   @default("monthly") // monthly, yearly
+  subscriptionStatus String? // Stripe subscription status: active, canceled, incomplete, etc.
+  currentPeriodStart DateTime? // Inicio del período actual de facturación
+  currentPeriodEnd  DateTime? // Fin del período actual de facturación
+  cancelAtPeriodEnd Boolean  @default(false) // Si la suscripción se cancelará al final del período
+  
+  // Configuraciones específicas
+  maxUsers          Int      @default(5)  // Límite de usuarios según plan
+  maxPatients       Int      @default(100) // Límite de pacientes según plan
+  features          String[] @default([]) // Características habilitadas
+  
+  // Datos del propietario principal
+  ownerName         String
+  ownerEmail        String
+  ownerPhone        String?
+  
+  // Configuración fiscal
+  taxId             String?  // RFC, CIF, NIT
+  fiscalAddress     Json?
+  
+  // Configuración técnica
+  subdomain         String?  @unique // Para subdominio personalizado
+  customDomain      String?  @unique // Para dominio personalizado
+  
+  // Fechas
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  // Relaciones
+  users             User[]        // Usuarios de la organización
+  patients          Patient[]     // Pacientes de la organización
+  appointments      Appointment[] // Citas de la organización
+  invoices          Invoice[]     // Facturas de la organización
+  stripeSubscription StripeSubscription? @relation("OrganizationSubscription") // Suscripción de Stripe
+  
+  // Índices para mejorar rendimiento
+  @@index([slug])
+  @@index([status])
+  @@index([plan])
+}
+
+model OrganizationInvitation {
+  id                String   @id @default(cuid())
+  organizationId    String
+  email             String
+  role              String   @default("AUXILIAR")
+  token             String   @unique
+  expiresAt         DateTime
+  acceptedAt        DateTime?
+  invitedBy         String?  // User ID who sent the invitation
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  @@unique([organizationId, email])
+  @@index([token])
+}
+
+model SubscriptionPlan {
+  id                String   @id @default(cuid())
+  name              String   // "Básico", "Pro", "Enterprise"
+  slug              String   @unique
+  description       String?
+  
+  // Precios
+  monthlyPrice      Decimal  @db.Decimal(10,2)
+  yearlyPrice       Decimal  @db.Decimal(10,2)
+  
+  // Límites
+  maxUsers          Int
+  maxPatients       Int
+  storageLimit      Int      // En GB
+  
+  // Características
+  features          String[] @default([])
+  
+  // Estados
+  isActive          Boolean  @default(true)
+  isPopular         Boolean  @default(false)
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  @@index([slug])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id            String    @id @default(cuid())
+  organizationId String   // Multi-tenancy: cada usuario pertenece a una organización
+  name          String?
+  firstName     String?
+  lastName      String?
+  email         String    // Removemos @unique ya que puede repetirse entre organizaciones
+  password      String?
+  role          String    @default("AUXILIAR") // ADMIN, DOCTOR, RECEPCIONISTA, AUXILIAR
+  phone         String?
+  especialidad  String?   // Para doctores (reemplaza specialization)
+  licencia      String?   // Número de licencia profesional
+  estado        String    @default("ACTIVO") // ACTIVO, INACTIVO, SUSPENDIDO
+  fechaIngreso  DateTime  @default(now()) // Fecha de ingreso
+  permisos      String[]  @default([]) // Array de permisos
+  horarioTrabajo Json?    // Horario de trabajo semanal
+  tempPassword  Boolean   @default(false) // Indica si necesita cambiar password
+  active        Boolean   @default(true) // Mantener por compatibilidad
+  emailVerified DateTime?
+  image         String?
+  accounts      Account[]
+  sessions      Session[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relaciones
+  citas         Appointment[] @relation("DoctorAppointments")
+  tratamientos  Treatment[]   @relation("DoctorTreatments")
+  facturas      Invoice[]     @relation("UserInvoices")
+  prescriptions Prescription[] @relation("DoctorPrescriptions")
+  labOrders     LabOrder[]    @relation("DoctorLabOrders")
+  budgets       Budget[]      @relation("DoctorBudgets")
+  inventoryTransactions InventoryTransaction[] @relation("UserInventoryTransactions")
+  periodontograms Periodontogram[] @relation("DoctorPeriodontograms")
+  periodontalTreatments PeriodontalTreatment[] @relation("DoctorPeriodontalTreatments")
+  expenses        Expense[]        @relation("UserExpenses")
+  treatmentPlans  TreatmentPlan[]  @relation("DoctorTreatmentPlans")
+  treatmentOrders TreatmentOrder[] @relation("DoctorTreatmentOrders")
+  calComConfig    CalComConfig? @relation("UserCalComConfig")
+  staffMember     StaffMember?  @relation("UserStaffMember")
+  financingPlans  FinancingPlan[] @relation("DoctorFinancingPlans")
+  
+  // Relaciones para control de caja
+  cashRegisters   CashRegister[]  @relation("ResponsibleCashRegister")
+  cashMovements   CashMovement[]  @relation("UserCashMovements")
+  cashSessions    CashSession[]   @relation("UserCashSessions")
+  
+  // Relaciones para morosidad
+  assignedDelinquencyNotifications DelinquencyNotification[] @relation("AssignedDelinquencyNotifications")
+  delinquencyActions              DelinquencyAction[]       @relation("UserDelinquencyActions")
+  
+  // Relaciones para inventario
+  managedLocations                Location[]                @relation("LocationManager")
+  inventoryMovements              InventoryMovement[]       @relation("UserInventoryMovements")
+  createdPurchaseOrders           PurchaseOrder[]           @relation("UserPurchaseOrders")
+  approvedPurchaseOrders          PurchaseOrder[]           @relation("UserPurchaseOrderApprovals")
+  
+  // Relación multi-tenancy
+  organization                    Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  // Índices compuestos para multi-tenancy
+  @@unique([organizationId, email]) // Email único por organización
+  @@index([organizationId])
+  @@index([organizationId, role])
+  @@index([organizationId, estado])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model PatientInvitation {
+  id          String   @id @default(cuid())
+  patientId   String   @unique // Un paciente solo puede tener una invitación activa
+  token       String   @unique
+  expires     DateTime
+  isUsed      Boolean  @default(false)
+  usedAt      DateTime?
+  createdAt   DateTime @default(now())
+  
+  // Relación
+  patient     Patient  @relation("PatientInvitation", fields: [patientId], references: [id], onDelete: Cascade)
+}
+
+model Configuration {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model CalComConfig {
+  id              String   @id @default(cuid())
+  userId          String   @unique // Usuario propietario de la configuración
+  
+  // Cal.com API Configuration
+  apiKey          String?
+  calId           String?  // Cal.com calendar ID
+  webhookId       String?  // Webhook ID from Cal.com
+  webhookSecret   String?  // Webhook secret for verification
+  
+  // Integration Status
+  isEnabled       Boolean  @default(false)
+  isConnected     Boolean  @default(false)
+  
+  // Sync Configuration
+  syncEnabled     Boolean  @default(true)
+  autoSync        Boolean  @default(true)
+  lastSync        DateTime?
+  syncErrors      String?  @db.Text
+  
+  // Webhook Configuration
+  webhookUrl      String?  // Our webhook endpoint
+  webhookEvents   String[] @default(["BOOKING_CREATED", "BOOKING_CANCELLED", "BOOKING_RESCHEDULED"])
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relación
+  user            User     @relation("UserCalComConfig", fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model TreatmentPlan {
+  id                 String   @id @default(cuid())
+  title              String
+  description        String?
+  patientId          String
+  doctorId           String
+  budgetId           String?  @unique
+  status             String   @default("Planificado") // Planificado, En Progreso, Completado, Cancelado
+  priority           String   @default("Media") // Alta, Media, Baja
+  estimatedDuration  Int?     // en minutos
+  estimatedSessions  Int?
+  totalCost          Float    @default(0)
+  notes              String?
+  startDate          DateTime?
+  endDate            DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  
+  patient            Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor             User     @relation("DoctorTreatmentPlans", fields: [doctorId], references: [id])
+  budget             Budget?  @relation(fields: [budgetId], references: [id])
+  treatments         TreatmentSession[]
+  treatmentOrders    TreatmentOrder[] @relation("TreatmentPlanOrders")
+}
+
+model TreatmentSession {
+  id                 String   @id @default(cuid())
+  treatmentPlanId    String
+  title              String
+  description        String?
+  tooth              String?
+  surface            String?
+  procedure          String
+  status             String   @default("Pendiente") // Pendiente, En Progreso, Completado, Cancelado
+  priority           String   @default("Media")
+  estimatedDuration  Int?     // en minutos
+  actualDuration     Int?
+  cost               Float    @default(0)
+  notes              String?
+  sessionNumber      Int?
+  completedDate      DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  
+  treatmentPlan      TreatmentPlan @relation(fields: [treatmentPlanId], references: [id], onDelete: Cascade)
+}
+
+model Patient {
+  id              String   @id @default(cuid())
+  organizationId  String   // Multi-tenancy: cada paciente pertenece a una organización
+  numeroExpediente String   @default(cuid())
+  firstName       String
+  lastName        String
+  email           String?
+  phone           String
+  address         String?
+  city            String?
+  birthDate       DateTime?
+  gender          String?
+  occupation      String?
+  emergencyContact String?
+  emergencyPhone   String?
+  bloodType       String?
+  allergies       String?  @db.Text
+  medicalHistory  String?  @db.Text
+  insuranceInfo   String?
+  notes           String?  @db.Text
+  status          String   @default("Activo") // Activo, Inactivo
+  
+  // Datos fiscales
+  rfc             String?  // RFC para México
+  curp            String?  // CURP para México
+  taxId           String?  // CIF/NIF para España
+  vatNumber       String?  // Número IVA para España
+  fiscalAddress   Json?    // Dirección fiscal completa
+  cfdiUse         String?  // Uso de CFDI por defecto para el paciente
+  
+  // Campos para acceso al portal
+  hasPortalAccess Boolean  @default(false) // Si tiene acceso al portal
+  portalPassword  String?  // Hash de la contraseña para el portal
+  firstLoginCompleted Boolean @default(false) // Si completó el primer login
+  invitationSent  Boolean  @default(false) // Si se envió la invitación
+  invitationSentAt DateTime? // Cuándo se envió la invitación
+  
+  // Campos para recuperación de contraseña
+  resetToken      String?   // Token para recuperación de contraseña
+  resetTokenExpiry DateTime? // Expiración del token de recuperación
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relaciones
+  appointments    Appointment[]
+  treatments      Treatment[]
+  invoices        Invoice[]
+  documents       MedicalDocument[]
+  prescriptions   Prescription[]
+  labOrders       LabOrder[]
+  budgets         Budget[]
+  treatmentPlans  TreatmentPlan[]
+  treatmentOrders TreatmentOrder[]
+  inventoryTransactions InventoryTransaction[]
+  inventoryMovements    InventoryMovement[] // Movimientos de inventario relacionados con el paciente
+  crmInfo         CrmPatient? // Información del CRM
+  insurancePolicies PatientInsurance[] // Pólizas de seguro del paciente
+  insuranceClaims InsuranceClaim[] // Reclamos de seguro
+  preAuthorizations PreAuthorization[] // Preautorizaciones
+  periodontograms Periodontogram[] // Periodontogramas del paciente
+  periodontalTreatments PeriodontalTreatment[] // Tratamientos periodontales
+  financingPlans FinancingPlan[] // Planes de financiamiento del paciente
+  cashMovements CashMovement[] // Movimientos de caja relacionados con el paciente
+  delinquencyNotifications DelinquencyNotification[] // Notificaciones de morosidad
+  delinquencyActions DelinquencyAction[] // Acciones de morosidad
+  whatsappMessages WhatsAppMessage[] // Mensajes de WhatsApp
+  odontogramas Odontograma[] // Odontogramas del paciente
+  
+  // Relación con invitación al portal
+  invitation PatientInvitation? @relation("PatientInvitation")
+  
+  // Relación multi-tenancy
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  // Índices compuestos para multi-tenancy
+  @@unique([organizationId, numeroExpediente]) // Número de expediente único por organización
+  @@index([organizationId])
+  @@index([organizationId, status])
+}
+
+model Appointment {
+  id          String   @id @default(cuid())
+  organizationId String // Multi-tenancy: cada cita pertenece a una organización
+  patientId   String
+  doctorId    String
+  date        DateTime
+  startTime   String   // HH:MM format
+  endTime     String   // HH:MM format
+  type        String   // Consulta, Limpieza, Tratamiento, etc.
+  reason      String?
+  status      String   @default("Programada") // Programada, Completada, Cancelada, No Presentó
+  notes       String?  @db.Text
+  duration    Int      @default(30) // minutos
+  calComBookingId String? @unique // ID de la reserva en Cal.com
+  calComEventId   String? // ID del evento en Cal.com
+  syncStatus      String  @default("pending") // pending, synced, failed
+  syncErrors      String? @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relaciones
+  patient     Patient  @relation(fields: [patientId], references: [id])
+  doctor      User     @relation("DoctorAppointments", fields: [doctorId], references: [id])
+  treatments  Treatment[]
+  whatsappMessages WhatsAppMessage[] // Mensajes de WhatsApp relacionados con esta cita
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  // Índices para multi-tenancy
+  @@index([organizationId])
+  @@index([organizationId, date])
+  @@index([organizationId, doctorId])
+  @@index([organizationId, patientId])
+}
+
+model Treatment {
+  id            String   @id @default(cuid())
+  organizationId String  // Multi-tenancy: cada tratamiento pertenece a una organización
+  patientId     String
+  appointmentId String?
+  doctorId      String
+  name          String   // Nombre del tratamiento
+  category      String   // Preventivo, Restaurativo, Endodoncia, etc.
+  description   String?  @db.Text
+  diagnosis     String?  @db.Text
+  procedure     String?  @db.Text
+  medications   String?  @db.Text
+  instructions  String?  @db.Text
+  cost          Decimal  @default(0) @db.Decimal(10,2)
+  status        String   @default("Planificado") // Planificado, En Progreso, Completado, Cancelado
+  startDate     DateTime @default(now())
+  completedDate DateTime?
+  notes         String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relaciones  
+  patient       Patient     @relation(fields: [patientId], references: [id])
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id])
+  doctor        User        @relation("DoctorTreatments", fields: [doctorId], references: [id])
+  invoiceItems  InvoiceItem[]
+  prescriptions Prescription[]
+  labOrders     LabOrder[]
+  budgetId      String?   // Relación opcional con presupuesto
+  budget        Budget?   @relation("BudgetTreatments", fields: [budgetId], references: [id])
+  materialConsumptions MaterialConsumption[]
+  inventoryTransactions InventoryTransaction[]
+  inventoryMovements InventoryMovement[] // Movimientos de inventario relacionados con el tratamiento
+  insuranceClaims InsuranceClaim[] // Reclamos de seguro relacionados
+  preAuthorizations PreAuthorization[] // Preautorizaciones relacionadas
+}
+
+model Invoice {
+  id          String   @id @default(cuid())
+  organizationId String // Multi-tenancy: cada factura pertenece a una organización
+  invoiceNumber String @default(cuid())
+  patientId   String
+  userId      String   // Usuario que crea la factura
+  subtotal    Decimal  @default(0) @db.Decimal(10,2)
+  tax         Decimal  @default(0) @db.Decimal(10,2)
+  discount    Decimal  @default(0) @db.Decimal(10,2)
+  total       Decimal  @default(0) @db.Decimal(10,2)
+  status      String   @default("Pendiente") // Pendiente, Pagada, Parcialmente Pagada, Vencida
+  issueDate   DateTime @default(now())
+  dueDate     DateTime?
+  paidDate    DateTime?
+  notes       String?  @db.Text
+  
+  // Campos específicos por país
+  country     String   @default("MX") // MX, ES
+  currency    String   @default("MXN") // MXN, EUR
+  
+  // Campos CFDI para México
+  cfdiUse     String?  // Uso de CFDI (G01, G02, G03, etc.)
+  paymentMethod String? // Forma de pago (01, 02, 03, etc.)
+  paymentType String?  // Tipo de pago (PUE, PPD)
+  cfdiType    String?  // Tipo de comprobante (I, E, T, etc.)
+  uuid        String?  // UUID del CFDI
+  digitalStamp String? @db.Text // Sello digital
+  certification String? @db.Text // Certificación
+  cfdiStatus  String?  // Estado del CFDI (Vigente, Cancelado)
+  
+  // Datos fiscales del emisor y receptor
+  issuerRfc   String?  // RFC del emisor
+  issuerName  String?  // Nombre del emisor
+  receiverRfc String?  // RFC del receptor
+  receiverName String? // Nombre del receptor
+  receiverAddress Json? // Dirección del receptor
+  
+  // Datos fiscales España
+  taxId       String?  // CIF/NIF para España
+  vatNumber   String?  // Número IVA
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relaciones
+  patient     Patient       @relation(fields: [patientId], references: [id])
+  user        User          @relation("UserInvoices", fields: [userId], references: [id])
+  items       InvoiceItem[]
+  payments    Payment[]
+  cashMovements CashMovement[] // Movimientos de caja relacionados con esta factura
+  delinquencyNotifications DelinquencyNotification[] // Notificaciones de morosidad relacionadas
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  // Índices para multi-tenancy
+  @@unique([organizationId, invoiceNumber]) // Número de factura único por organización
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@index([organizationId, patientId])
+}
+
+model InvoiceItem {
+  id          String   @id @default(cuid())
+  invoiceId   String
+  treatmentId String?
+  description String
+  quantity    Int      @default(1)
+  unitPrice   Decimal  @db.Decimal(10,2)
+  total       Decimal  @db.Decimal(10,2)
+  createdAt   DateTime @default(now())
+
+  // Relaciones
+  invoice     Invoice    @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  treatment   Treatment? @relation(fields: [treatmentId], references: [id])
+}
+
+model Payment {
+  id            String   @id @default(cuid())
+  invoiceId     String
+  amount        Decimal  @db.Decimal(10,2)
+  method        String   // Efectivo, Tarjeta, Transferencia, etc.
+  reference     String?  // Número de referencia
+  notes         String?
+  paymentDate   DateTime @default(now())
+  cashMovementId String? // Relación con movimiento de caja
+  createdAt     DateTime @default(now())
+
+  // Relaciones
+  invoice       Invoice       @relation(fields: [invoiceId], references: [id])
+  cashMovement  CashMovement? @relation(fields: [cashMovementId], references: [id])
+}
+
+model FiscalConfiguration {
+  id              String   @id @default(cuid())
+  country         String   // MX, ES
+  
+  // Datos México
+  rfc             String?  // RFC de la clínica
+  businessName    String?  // Razón social
+  comercialName   String?  // Nombre comercial
+  taxRegime       String?  // Régimen fiscal
+  postalCode      String?  // Código postal
+  
+  // Configuración CFDI
+  certificateFile String?  // Ruta del archivo .cer
+  keyFile         String?  // Ruta del archivo .key
+  keyPassword     String?  // Password de la llave privada
+  pacProvider     String?  // Proveedor PAC
+  pacUsername     String?  // Usuario PAC
+  pacPassword     String?  // Password PAC
+  pacApiUrl       String?  // URL API PAC
+  pacApiToken     String?  // Token API PAC
+  
+  // Datos España
+  cif             String?  // CIF de la clínica
+  vatNumber       String?  // Número IVA
+  companyName     String?  // Nombre de la empresa
+  
+  // Datos generales
+  address         Json?    // Dirección fiscal completa
+  phone           String?
+  email           String?
+  website         String?
+  
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@unique([country])
+}
+
+model ClinicSettings {
+  id            String   @id @default(cuid())
+  
+  // Información general de la clínica
+  clinicName    String   @default("Smile 360 Dental Clinic")
+  address       String?
+  city          String?
+  state         String?
+  zipCode       String?
+  country       String?
+  phone         String?
+  email         String?
+  website       String?
+  logo          String?
+  
+  // Configuración regional
+  currency      String   @default("USD")
+  timezone      String   @default("America/New_York")
+  language      String   @default("es")
+  dateFormat    String   @default("DD/MM/YYYY")
+  timeFormat    String   @default("24") // "12" or "24"
+  
+  // Configuración de citas
+  workingHours  String?  @db.Text // JSON format
+  appointmentDuration Int @default(30) // minutos por defecto
+  appointmentBuffer Int @default(15) // tiempo entre citas
+  maxAdvanceBooking Int @default(90) // días máximos para agendar
+  appointmentReminders String? @db.Text // JSON con configuración de recordatorios
+  
+  // Configuración fiscal y facturación
+  taxRate       Decimal  @default(0) @db.Decimal(5,2)
+  taxId         String? // RFC, NIT, Tax ID
+  invoicePrefix String   @default("INV")
+  invoiceFooter String?  @db.Text
+  paymentTerms  String   @default("Inmediato")
+  
+  // Configuración de notificaciones
+  emailNotifications Boolean @default(true)
+  smsNotifications Boolean @default(false)
+  whatsappNotifications Boolean @default(false)
+  smtpServer    String?
+  smtpPort      Int?
+  smtpUsername  String?
+  smtpPassword  String? // Encriptado
+  
+  // Configuración de seguridad
+  sessionTimeout Int @default(60) // minutos
+  passwordMinLength Int @default(8)
+  requireTwoFactor Boolean @default(false)
+  
+  // Configuración del sistema
+  defaultPatientStatus String @default("Activo")
+  autoBackup    Boolean @default(true)
+  backupFrequency String @default("diario")
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// Modelos para manejo de documentos médicos
+model MedicalDocument {
+  id           String   @id @default(cuid())
+  patientId    String
+  type         String   // "historia_clinica", "radiografia", "foto", "documento_legal", etc.
+  name         String   // Nombre del archivo
+  filename     String   // Nombre del archivo en el sistema
+  originalName String   // Nombre original del archivo
+  mimeType     String   // Tipo MIME del archivo
+  size         Int      // Tamaño en bytes
+  url          String   // URL del archivo
+  description  String?  @db.Text
+  category     String?  // Categorización adicional
+  tags         String?  // Tags separados por comas
+  isActive     Boolean  @default(true)
+  uploadDate   DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relaciones
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+}
+
+// Modelo para recetas médicas
+model Prescription {
+  id            String   @id @default(cuid())
+  patientId     String
+  doctorId      String
+  treatmentId   String?  // Opcional: asociado a un tratamiento específico
+  prescriptionNumber String @unique @default(cuid())
+  
+  // Información del profesional
+  doctorName           String
+  professionalLicense  String   // Cédula o licencia profesional
+  specialization       String?
+  
+  // Información de la prescripción
+  diagnosis     String   @db.Text
+  instructions  String   @db.Text
+  medications   String   @db.Text  // JSON con detalles de medicamentos
+  
+  // Configuración
+  template      String?  // Template utilizado
+  notes         String?  @db.Text
+  
+  // Fechas
+  prescriptionDate DateTime @default(now())
+  validUntil       DateTime?
+  
+  // Estado
+  status        String   @default("Activa") // Activa, Vencida, Cancelada
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relaciones
+  patient       Patient    @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor        User       @relation("DoctorPrescriptions", fields: [doctorId], references: [id])
+  treatment     Treatment? @relation(fields: [treatmentId], references: [id])
+}
+
+// Modelo para órdenes de laboratorio
+model LabOrder {
+  id           String   @id @default(cuid())
+  patientId    String
+  doctorId     String
+  treatmentId  String?  // Opcional: asociado a un tratamiento específico
+  orderNumber  String   @unique @default(cuid())
+  
+  // Información de la orden
+  type         String   // "analisis_sangre", "radiografia", "biopsia", etc.
+  tests        String   @db.Text  // JSON con detalles de los estudios solicitados
+  instructions String?  @db.Text
+  diagnosis    String?  @db.Text
+  priority     String   @default("Normal") // Alta, Normal, Baja
+  
+  // Estado
+  status       String   @default("Solicitada") // Solicitada, En_Proceso, Completada, Cancelada
+  
+  // Fechas
+  orderDate    DateTime @default(now())
+  expectedDate DateTime?
+  completedDate DateTime?
+  
+  // Resultados
+  hasResults   Boolean  @default(false)
+  resultsNotes String?  @db.Text
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relaciones
+  patient      Patient    @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor       User       @relation("DoctorLabOrders", fields: [doctorId], references: [id])
+  treatment    Treatment? @relation(fields: [treatmentId], references: [id])
+  results      LabResult[]
+}
+
+// Modelo para resultados de laboratorio
+model LabResult {
+  id          String   @id @default(cuid())
+  labOrderId  String
+  type        String   // "documento", "imagen", "texto"
+  name        String   // Nombre del resultado
+  filename    String?  // Para archivos
+  url         String?  // URL del archivo o imagen
+  content     String?  @db.Text // Para resultados de texto
+  mimeType    String?
+  size        Int?
+  description String?  @db.Text
+  uploadDate  DateTime @default(now())
+  createdAt   DateTime @default(now())
+  
+  // Relaciones
+  labOrder    LabOrder @relation(fields: [labOrderId], references: [id], onDelete: Cascade)
+}
+
+// Modelo para plantillas de recetas
+model PrescriptionTemplate {
+  id           String   @id @default(cuid())
+  name         String   // Nombre de la plantilla
+  category     String   // Categoría: "odontologia", "general", etc.
+  description  String?  @db.Text
+  
+  // Estructura de la plantilla
+  medications  String   @db.Text  // JSON con medicamentos predefinidos
+  instructions String   @db.Text  // Instrucciones estándar
+  
+  isActive     Boolean  @default(true)
+  isDefault    Boolean  @default(false)
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// =============================================
+// MÓDULO DE PRESUPUESTOS
+// =============================================
+
+model Budget {
+  id            String   @id @default(cuid())
+  budgetNumber  String   @unique @default(cuid())
+  patientId     String
+  doctorId      String   // Doctor que crea el presupuesto
+  
+  // Información del presupuesto
+  title         String   // Título del presupuesto
+  description   String?  @db.Text
+  treatment     String?  // Tratamiento principal presupuestado
+  
+  // Costos
+  subtotal      Decimal  @default(0) @db.Decimal(10,2)
+  discount      Decimal  @default(0) @db.Decimal(10,2)
+  tax           Decimal  @default(0) @db.Decimal(10,2)
+  total         Decimal  @default(0) @db.Decimal(10,2)
+  
+  // Estado y fechas
+  status        String   @default("Borrador") // Borrador, Enviado, Aprobado, Rechazado, Vencido, Convertido
+  validUntil    DateTime? // Fecha límite de validez
+  approvedDate  DateTime?
+  rejectedDate  DateTime?
+  convertedDate DateTime? // Fecha de conversión a tratamiento
+  
+  // Información adicional
+  notes         String?  @db.Text
+  termsConditions String? @db.Text
+  
+  // Odontograma
+  includeOdontogram Boolean @default(false) // Si incluir odontograma en el presupuesto
+  odontogramaData   String? @db.Text // Datos del odontograma en JSON
+  
+  // Plan de financiamiento temporal (hasta crear FinancingPlan completo)
+  paymentPlan       String? // Tipo de plan seleccionado
+  customPayments    String? @db.Text // Pagos personalizados en JSON
+  
+  // Firma digital del paciente
+  patientSignature String? @db.Text // Base64 de la firma
+  signatureDate    DateTime?
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relaciones
+  patient       Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor        User          @relation("DoctorBudgets", fields: [doctorId], references: [id])
+  items         BudgetItem[]
+  treatments    Treatment[]   @relation("BudgetTreatments") // Tratamientos generados del presupuesto
+  treatmentPlan TreatmentPlan? // Plan de tratamiento generado del presupuesto
+  treatmentOrders TreatmentOrder[] // Órdenes de tratamiento generadas del presupuesto
+  financingPlan FinancingPlan? // Plan de financiamiento asociado al presupuesto
+}
+
+model BudgetItem {
+  id          String   @id @default(cuid())
+  budgetId    String
+  
+  // Información del elemento
+  type        String   // "tratamiento", "material", "servicio"
+  name        String   // Nombre del tratamiento/servicio
+  description String?  @db.Text
+  category    String?  // Categoría del tratamiento
+  
+  // Costos
+  quantity    Int      @default(1)
+  unitPrice   Decimal  @db.Decimal(10,2)
+  discount    Decimal  @default(0) @db.Decimal(10,2)
+  total       Decimal  @db.Decimal(10,2)
+  
+  // Información adicional
+  priority    String   @default("Normal") // Alta, Normal, Baja
+  estimated   Boolean  @default(false) // Si es un costo estimado
+  notes       String?  @db.Text
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relaciones
+  budget      Budget   @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  productId   String?  // Relación opcional con inventario
+  product     Product? @relation(fields: [productId], references: [id])
+}
+
+// =============================================
+// MÓDULO DE INVENTARIOS - FASE 1
+// =============================================
+
+// Enums para inventario
+enum ProductCategory {
+  MATERIALES_DENTALES
+  INSTRUMENTAL
+  EQUIPOS
+  MEDICAMENTOS
+  CONSUMIBLES
+  LIMPIEZA
+  OFICINA
+  OTROS
+}
+
+enum ProductUnit {
+  UNIDAD
+  CAJA
+  PAQUETE
+  LITRO
+  MILILITRO
+  KILOGRAMO
+  GRAMO
+  METRO
+  CENTIMETRO
+  PIEZA
+}
+
+enum MovementType {
+  ENTRADA
+  SALIDA
+  AJUSTE
+  CONSUMO
+  DEVOLUCION
+  MERMA
+  TRANSFERENCIA
+}
+
+enum MovementSubtype {
+  COMPRA
+  STOCK_INICIAL
+  USO_TRATAMIENTO
+  VENCIMIENTO
+  DANO
+  INVENTARIO
+  CORRECCION
+  TRANSFERENCIA_ENTRADA
+  TRANSFERENCIA_SALIDA
+}
+
+// Modelo para proveedores
+model Supplier {
+  id              String   @id @default(cuid())
+  code            String   @unique // Código único del proveedor
+  name            String   // Nombre o razón social
+  commercialName  String?  // Nombre comercial
+  
+  // Información de contacto
+  contactPerson   String?  // Persona de contacto
+  phone           String?
+  email           String?
+  website         String?
+  
+  // Dirección
+  address         String?
+  city            String?
+  state           String?
+  postalCode      String?
+  country         String   @default("México")
+  
+  // Información fiscal
+  taxId           String?  // RFC/NIT/CIF
+  vatNumber       String?  // Número de IVA
+  taxAddress      Json?    // Dirección fiscal completa
+  
+  // Términos comerciales
+  paymentTerms    String?  // Términos de pago
+  creditLimit     Decimal? @db.Decimal(10,2) // Límite de crédito
+  discount        Decimal  @default(0) @db.Decimal(5,2) // Descuento por defecto
+  
+  // Información bancaria
+  bankName        String?
+  bankAccount     String?
+  
+  // Configuración
+  isActive        Boolean  @default(true)
+  isPreferred     Boolean  @default(false) // Proveedor preferido
+  deliveryDays    Int      @default(7) // Días de entrega promedio
+  minOrderAmount  Decimal? @db.Decimal(10,2) // Monto mínimo de pedido
+  
+  // Calificación y notas
+  rating          Int      @default(5) // Calificación 1-5
+  notes           String?  @db.Text
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relaciones
+  products        Product[] // Productos que suministra
+  purchaseOrders  PurchaseOrder[] // Órdenes de compra
+  movements       InventoryMovement[] // Movimientos de inventario del proveedor
+}
+
+// Modelo para ubicaciones/almacenes
+model Location {
+  id          String   @id @default(cuid())
+  code        String   @unique // Código de la ubicación
+  name        String   // Nombre de la ubicación
+  type        String   @default("ALMACEN") // ALMACEN, GABINETE, LABORATORIO, FARMACIA
+  description String?  @db.Text
+  
+  // Información física
+  building    String?  // Edificio
+  floor       String?  // Piso
+  room        String?  // Habitación/Consultorio
+  section     String?  // Sección dentro de la habitación
+  
+  // Configuración
+  isActive    Boolean  @default(true)
+  isDefault   Boolean  @default(false) // Ubicación por defecto
+  capacity    Int?     // Capacidad máxima de productos
+  
+  // Responsable
+  managerId   String?  // Usuario responsable de la ubicación
+  
+  // Control de acceso
+  requiresAuth Boolean @default(false) // Requiere autorización para acceder
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relaciones
+  manager     User?    @relation("LocationManager", fields: [managerId], references: [id])
+  stocks      Stock[]  // Stock por ubicación
+  movements   InventoryMovement[] // Movimientos en esta ubicación
+}
+
+// Modelo mejorado para productos
+model Product {
+  id            String   @id @default(cuid())
+  sku           String   @unique // SKU único del producto
+  code          String   @unique // Código interno (mantener por compatibilidad)
+  name          String   // Nombre del producto
+  description   String?  @db.Text
+  
+  // Categorización mejorada
+  category      ProductCategory // Categoría principal (enum)
+  subcategory   String?  // Subcategoría
+  brand         String?  // Marca
+  model         String?  // Modelo
+  
+  // Información del proveedor principal
+  supplierId    String?  // Proveedor principal
+  supplierCode  String?  // Código del proveedor para este producto
+  
+  // Costos y precios
+  purchasePrice Decimal  @default(0) @db.Decimal(10,2) // Último precio de compra
+  averageCost   Decimal  @default(0) @db.Decimal(10,2) // Costo promedio ponderado
+  salePrice     Decimal  @default(0) @db.Decimal(10,2) // Precio de venta
+  
+  // Información de medidas
+  unit          ProductUnit @default(UNIDAD) // Unidad de medida (enum)
+  presentation  String?  // Presentación (ej: "Caja de 50 unidades")
+  weight        Decimal? @db.Decimal(8,3) // Peso en kg
+  volume        Decimal? @db.Decimal(8,3) // Volumen en litros
+  
+  // Control de inventario global
+  totalStock    Int      @default(0) // Stock total (suma de todas las ubicaciones)
+  minStock      Int      @default(0) // Stock mínimo global
+  maxStock      Int      @default(0) // Stock máximo global
+  reorderPoint  Int      @default(0) // Punto de reorden
+  
+  // Estados y configuración
+  isActive      Boolean  @default(true)
+  requiresLot   Boolean  @default(false) // Si requiere manejo de lotes
+  hasExpiration Boolean  @default(false) // Si tiene fecha de vencimiento
+  isConsumable  Boolean  @default(true) // Si es consumible en tratamientos
+  
+  // Información adicional
+  barcode       String?  // Código de barras
+  qrCode        String?  // Código QR
+  imageUrl      String?  // URL de la imagen del producto
+  
+  // Fechas
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relaciones
+  supplier      Supplier? @relation(fields: [supplierId], references: [id])
+  stocks        Stock[]   // Stock por ubicación
+  movements     InventoryMovement[] // Movimientos del producto
+  transactions  InventoryTransaction[] // Mantener por compatibilidad
+  budgetItems   BudgetItem[]
+  consumptions  MaterialConsumption[]
+  alerts        InventoryAlert[]
+  purchaseOrderItems PurchaseOrderItem[] // Items en órdenes de compra
+}
+
+// Modelo para stock por ubicación
+model Stock {
+  id            String   @id @default(cuid())
+  productId     String
+  locationId    String
+  
+  // Cantidades
+  quantity      Int      @default(0) // Cantidad actual
+  reserved      Int      @default(0) // Cantidad reservada
+  available     Int      @default(0) // Cantidad disponible (quantity - reserved)
+  
+  // Control específico por ubicación
+  minStock      Int      @default(0) // Stock mínimo en esta ubicación
+  maxStock      Int      @default(0) // Stock máximo en esta ubicación
+  
+  // Información de lotes (si aplica)
+  lotNumber     String?  // Número de lote
+  expirationDate DateTime? // Fecha de vencimiento del lote
+  
+  // Costos
+  unitCost      Decimal  @default(0) @db.Decimal(10,2) // Costo unitario del stock
+  totalValue    Decimal  @default(0) @db.Decimal(10,2) // Valor total del stock
+  
+  // Fechas
+  lastMovement  DateTime @default(now()) // Última vez que hubo movimiento
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relaciones
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  location      Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  
+  @@unique([productId, locationId, lotNumber]) // Un producto por ubicación por lote
+  @@index([productId])
+  @@index([locationId])
+}
+
+// Modelo mejorado para movimientos de inventario
+model InventoryMovement {
+  id              String   @id @default(cuid())
+  movementNumber  String   @unique @default(cuid())
+  
+  // Información básica
+  productId       String
+  locationId      String
+  type            MovementType // Tipo de movimiento (enum)
+  subtype         MovementSubtype? // Subtipo específico (enum)
+  
+  // Cantidades
+  quantity        Int      // Cantidad (positiva para entradas, negativa para salidas)
+  quantityBefore  Int      // Cantidad antes del movimiento
+  quantityAfter   Int      // Cantidad después del movimiento
+  
+  // Costos
+  unitCost        Decimal? @db.Decimal(10,2) // Costo unitario
+  totalCost       Decimal? @db.Decimal(10,2) // Costo total del movimiento
+  
+  // Información del lote (si aplica)
+  lotNumber       String?  // Número de lote
+  expirationDate  DateTime? // Fecha de vencimiento
+  
+  // Referencias
+  reference       String?  // Referencia externa (factura, orden, etc.)
+  documentNumber  String?  // Número de documento
+  
+  // Información adicional
+  description     String?  @db.Text
+  notes           String?  @db.Text
+  
+  // Relaciones opcionales
+  supplierId      String?  // Proveedor (para entradas por compra)
+  patientId       String?  // Paciente (para consumos en tratamientos)
+  treatmentId     String?  // Tratamiento específico
+  purchaseOrderId String?  // Orden de compra relacionada
+  
+  // Usuario y fechas
+  userId          String   // Usuario que registra el movimiento
+  movementDate    DateTime @default(now()) // Fecha del movimiento
+  createdAt       DateTime @default(now())
+  
+  // Relaciones
+  product         Product     @relation(fields: [productId], references: [id])
+  location        Location    @relation(fields: [locationId], references: [id])
+  supplier        Supplier?   @relation(fields: [supplierId], references: [id])
+  patient         Patient?    @relation(fields: [patientId], references: [id])
+  treatment       Treatment?  @relation(fields: [treatmentId], references: [id])
+  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  user            User        @relation("UserInventoryMovements", fields: [userId], references: [id])
+  
+  @@index([productId])
+  @@index([locationId])
+  @@index([movementDate])
+}
+
+// Modelo para órdenes de compra
+model PurchaseOrder {
+  id              String   @id @default(cuid())
+  orderNumber     String   @unique @default(cuid())
+  supplierId      String
+  
+  // Fechas
+  orderDate       DateTime @default(now())
+  expectedDate    DateTime? // Fecha esperada de entrega
+  receivedDate    DateTime? // Fecha de recepción
+  
+  // Estado
+  status          String   @default("PENDIENTE") // PENDIENTE, ENVIADA, PARCIAL, RECIBIDA, CANCELADA
+  
+  // Montos
+  subtotal        Decimal  @default(0) @db.Decimal(10,2)
+  tax             Decimal  @default(0) @db.Decimal(10,2)
+  discount        Decimal  @default(0) @db.Decimal(10,2)
+  total           Decimal  @default(0) @db.Decimal(10,2)
+  
+  // Información adicional
+  notes           String?  @db.Text
+  terms           String?  @db.Text // Términos y condiciones
+  
+  // Usuario que crea la orden
+  createdBy       String
+  approvedBy      String? // Usuario que aprueba
+  approvalDate    DateTime?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relaciones
+  supplier        Supplier @relation(fields: [supplierId], references: [id])
+  creator         User     @relation("UserPurchaseOrders", fields: [createdBy], references: [id])
+  approver        User?    @relation("UserPurchaseOrderApprovals", fields: [approvedBy], references: [id])
+  items           PurchaseOrderItem[]
+  movements       InventoryMovement[] // Movimientos generados por esta orden
+}
+
+// Items de órdenes de compra
+model PurchaseOrderItem {
+  id              String   @id @default(cuid())
+  purchaseOrderId String
+  productId       String
+  
+  // Cantidades
+  quantityOrdered Int      // Cantidad ordenada
+  quantityReceived Int     @default(0) // Cantidad recibida
+  
+  // Precios
+  unitPrice       Decimal  @db.Decimal(10,2) // Precio unitario
+  total           Decimal  @db.Decimal(10,2) // Total del item
+  
+  // Información adicional
+  notes           String?  @db.Text
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relaciones
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product         Product       @relation(fields: [productId], references: [id])
+}
+
+model InventoryTransaction {
+  id            String   @id @default(cuid())
+  productId     String
+  transactionNumber String @unique @default(cuid())
+  
+  // Tipo de transacción
+  type          String   // "entrada", "salida", "ajuste", "consumo"
+  subtype       String?  // "compra", "devolucion", "merma", "uso_tratamiento"
+  
+  // Cantidad y costos
+  quantity      Int      // Puede ser negativo para salidas
+  unitPrice     Decimal? @db.Decimal(10,2) // Precio unitario (para entradas)
+  totalCost     Decimal? @db.Decimal(10,2) // Costo total
+  
+  // Información adicional
+  reference     String?  // Referencia externa (número de factura, orden, etc.)
+  description   String?  @db.Text
+  notes         String?  @db.Text
+  
+  // Información de lotes (opcional)
+  lotNumber     String?
+  expirationDate DateTime?
+  
+  // Stock antes y después
+  stockBefore   Int      // Stock antes de la transacción
+  stockAfter    Int      // Stock después de la transacción
+  
+  // Relaciones opcionales
+  patientId     String?  // Para consumos en tratamientos
+  treatmentId   String?  // Para consumos en tratamientos
+  userId        String   // Usuario que registra la transacción
+  
+  createdAt     DateTime @default(now())
+  
+  // Relaciones
+  product       Product  @relation(fields: [productId], references: [id])
+  patient       Patient? @relation(fields: [patientId], references: [id])
+  treatment     Treatment? @relation(fields: [treatmentId], references: [id])
+  user          User     @relation("UserInventoryTransactions", fields: [userId], references: [id])
+}
+
+model MaterialConsumption {
+  id          String   @id @default(cuid())
+  treatmentId String
+  productId   String
+  
+  quantity    Int      // Cantidad consumida
+  unitCost    Decimal  @db.Decimal(10,2) // Costo unitario al momento del consumo
+  totalCost   Decimal  @db.Decimal(10,2) // Costo total
+  
+  notes       String?  @db.Text
+  consumedAt  DateTime @default(now())
+  
+  // Relaciones
+  treatment   Treatment @relation(fields: [treatmentId], references: [id], onDelete: Cascade)
+  product     Product  @relation(fields: [productId], references: [id])
+}
+
+// Modelo para alertas de inventario
+model InventoryAlert {
+  id          String   @id @default(cuid())
+  productId   String
+  type        String   // "stock_bajo", "vencimiento_proximo", "agotado"
+  message     String   @db.Text
+  priority    String   @default("Normal") // Alta, Normal, Baja
+  isRead      Boolean  @default(false)
+  isResolved  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  readAt      DateTime?
+  resolvedAt  DateTime?
+  
+  // Relaciones
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+// =============================================
+// MÓDULO DE CRM - EXTENSIONES
+// =============================================
+
+model CrmPatient {
+  id            String   @id @default(cuid())
+  patientId     String   @unique // Referencia al paciente principal
+  
+  // Información específica del CRM
+  source        String   // Fuente del prospecto
+  priority      String   @default("media") // alta, media, baja
+  status        String   @default("prospecto") // prospecto, consultado, presupuestado, aprobado, en_tratamiento, completado, perdido
+  assignedTo    String?  // Usuario asignado
+  
+  // Información de tratamiento y presupuesto
+  currentTreatment     String?  // Tratamiento actual en proceso
+  currentTreatmentType String?  // Tipo de tratamiento actual
+  budgetTotal          Decimal? @db.Decimal(10,2) // Total del presupuesto actual
+  budgetStatus         String?  // Estado del presupuesto actual
+  
+  // Seguimiento
+  lastContact   DateTime @default(now())
+  nextFollowUp  DateTime?
+  
+  // Notas específicas del CRM
+  crmNotes      String?  @db.Text
+  tags          String?  // Tags separados por comas
+  
+  // Fechas
+  convertedAt   DateTime? // Cuando se convirtió de prospecto
+  completedAt   DateTime? // Cuando completó el tratamiento
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relaciones
+  patient       Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+}
+
+// =============================================
+// MÓDULO DE PERIODONTOGRAMA
+// =============================================
+
+model Periodontogram {
+  id            String   @id @default(cuid())
+  patientId     String
+  doctorId      String
+  
+  // Información básica
+  title         String   @default("Periodontograma")
+  examinationDate DateTime @default(now())
+  notes         String?  @db.Text
+  diagnosis     String?  @db.Text
+  recommendations String? @db.Text
+  
+  // Estado del examen
+  status        String   @default("En_Proceso") // En_Proceso, Completado, Revisión
+  isTemplate    Boolean  @default(false)
+  
+  // Información adicional
+  riskLevel     String?  // Bajo, Moderado, Alto, Muy_Alto
+  treatmentPlan String?  @db.Text
+  followUpDate  DateTime?
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relaciones
+  patient       Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor        User     @relation("DoctorPeriodontograms", fields: [doctorId], references: [id])
+  measurements  PeriodontalMeasurement[]
+  toothStatuses ToothStatus[]
+  periodontalTreatments PeriodontalTreatment[] // Tratamientos periodontales relacionados
+}
+
+model PeriodontalMeasurement {
+  id              String   @id @default(cuid())
+  periodontogramId String
+  toothNumber     Int      // 11-48 (numeración FDI)
+  position        String   // "vestibular" o "lingual/palatino"
+  
+  // Mediciones (3 puntos por posición: mesial, central, distal)
+  // Profundidad de sondaje (mm)
+  pocketDepthMesial  Int @default(0)
+  pocketDepthCentral Int @default(0)
+  pocketDepthDistal  Int @default(0)
+  
+  // Nivel de inserción clínica (mm)
+  attachmentLevelMesial  Int @default(0)
+  attachmentLevelCentral Int @default(0)
+  attachmentLevelDistal  Int @default(0)
+  
+  // Recesión gingival (mm, puede ser negativo)
+  recessionMesial  Int @default(0)
+  recessionCentral Int @default(0)
+  recessionDistal  Int @default(0)
+  
+  // Margen gingival (mm, puede ser negativo para recesión)
+  gingivalMarginMesial  Int @default(0)
+  gingivalMarginCentral Int @default(0)
+  gingivalMarginDistal  Int @default(0)
+  
+  // Sangrado al sondaje (Boolean para cada punto)
+  bleedingMesial  Boolean @default(false)
+  bleedingCentral Boolean @default(false)
+  bleedingDistal  Boolean @default(false)
+  
+  // Supuración (Boolean para cada punto)
+  suppressionMesial  Boolean @default(false)
+  suppressionCentral Boolean @default(false)
+  suppressionDistal  Boolean @default(false)
+  
+  // Placa bacteriana (Boolean para cada punto)
+  plaqueMesial  Boolean @default(false)
+  plaqueCentral Boolean @default(false)
+  plaqueDistal  Boolean @default(false)
+  
+  // Movilidad dental (grados 0-3) - solo una por diente
+  mobility        Int @default(0) // 0: sin movilidad, 1-3: grados de movilidad
+  
+  // Afectación de furca (solo para molares)
+  furcationInvolvement String? // "Grado_I", "Grado_II", "Grado_III", null si no aplica
+  
+  // Observaciones específicas
+  notes           String? @db.Text
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relaciones
+  periodontogram  Periodontogram @relation(fields: [periodontogramId], references: [id], onDelete: Cascade)
+  
+  // Índice compuesto para evitar duplicados
+  @@unique([periodontogramId, toothNumber, position])
+}
+
+model ToothStatus {
+  id              String   @id @default(cuid())
+  periodontogramId String
+  toothNumber     Int      // 11-48 (numeración FDI)
+  
+  // Estado general del diente
+  status          String   @default("Presente") // Presente, Ausente, Implante, Corona, Puente
+  condition       String[] @default([]) // Array de condiciones: ["Sano", "Cariado", "Restaurado", "Endodoncia", etc.]
+  
+  // Superficies afectadas
+  surfaces        String[] @default([]) // ["Mesial", "Distal", "Vestibular", "Lingual", "Oclusal/Incisal"]
+  
+  // Tratamientos realizados/planificados
+  treatments      String[] @default([]) // Array de tratamientos
+  
+  // Colores para visualización
+  colorCode       String?  // Código de color para la representación gráfica
+  
+  // Información adicional
+  priority        String   @default("Normal") // Alta, Normal, Baja
+  notes           String?  @db.Text
+  
+  // Estado del tratamiento
+  treatmentStatus String   @default("No_Aplica") // No_Aplica, Planificado, En_Proceso, Completado
+  treatmentDate   DateTime?
+  
+  // Información específica para implantes
+  isImplant       Boolean  @default(false)
+  implantBrand    String?
+  implantSize     String?
+  
+  // Información específica para restauraciones
+  hasRestoration  Boolean  @default(false)
+  restorationType String?  // "Amalgama", "Resina", "Corona", "Incrustación", etc.
+  restorationCondition String? // "Buena", "Regular", "Mala", "Requiere_Reemplazo"
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relaciones
+  periodontogram  Periodontogram @relation(fields: [periodontogramId], references: [id], onDelete: Cascade)
+  
+  // Índice compuesto para evitar duplicados
+  @@unique([periodontogramId, toothNumber])
+}
+
+model PeriodontalTreatment {
+  id            String   @id @default(cuid())
+  patientId     String
+  doctorId      String
+  periodontogramId String? // Opcional: asociado a un periodontograma
+  
+  // Información del tratamiento
+  type          String   // "Profilaxis", "Raspado", "Cirugía Periodontal", etc.
+  description   String   @db.Text
+  area          String?  // Área tratada: "Cuadrante 1", "Diente 12", "Boca completa"
+  
+  // Planificación
+  sessions      Int      @default(1) // Número de sesiones planificadas
+  completedSessions Int @default(0) // Sesiones completadas
+  
+  // Fechas
+  startDate     DateTime @default(now())
+  completedDate DateTime?
+  nextSession   DateTime?
+  
+  // Estado y resultados
+  status        String   @default("Planificado") // Planificado, En Proceso, Completado, Suspendido
+  results       String?  @db.Text
+  complications String?  @db.Text
+  
+  // Costo
+  estimatedCost Decimal  @default(0) @db.Decimal(10,2)
+  actualCost    Decimal  @default(0) @db.Decimal(10,2)
+  
+  // Notas del tratamiento
+  treatmentNotes String? @db.Text
+  homeCarePlan   String? @db.Text // Plan de cuidado en casa
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relaciones
+  patient       Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor        User          @relation("DoctorPeriodontalTreatments", fields: [doctorId], references: [id])
+  periodontogram Periodontogram? @relation(fields: [periodontogramId], references: [id])
+}
+
+// =============================================
+// MÓDULO DE ASEGURADORAS
+// =============================================
+
+model InsuranceCompany {
+  id            String   @id @default(cuid())
+  name          String   @unique // Nombre de la aseguradora
+  code          String?  @unique // Código interno
+  
+  // Información de contacto
+  phone         String?
+  email         String?
+  website       String?
+  address       String?
+  
+  // Configuración de la aseguradora
+  contractNumber String? // Número de contrato con la clínica
+  contactPerson  String? // Persona de contacto
+  paymentTerms   String? // Términos de pago
+  coveragePercentage Decimal? @default(0) @db.Decimal(5,2) // Porcentaje de cobertura por defecto
+  
+  // Estados
+  isActive      Boolean  @default(true)
+  isPreferred   Boolean  @default(false) // Aseguradora preferida
+  
+  // Información adicional
+  notes         String?  @db.Text
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relaciones
+  policies      PatientInsurance[] // Pólizas de pacientes
+  claims        InsuranceClaim[]   // Reclamos
+  preAuthorizations PreAuthorization[]
+  coverages     InsuranceCoverage[] // Coberturas específicas
+}
+
+model PatientInsurance {
+  id              String   @id @default(cuid())
+  patientId       String
+  insuranceCompanyId String
+  
+  // Información de la póliza
+  policyNumber    String   // Número de póliza
+  groupNumber     String?  // Número de grupo
+  memberNumber    String?  // Número de miembro
+  
+  // Fechas de vigencia
+  startDate       DateTime
+  endDate         DateTime?
+  
+  // Información de cobertura
+  coverageType    String   @default("Básica") // Básica, Completa, Premium
+  maxBenefit      Decimal? @db.Decimal(10,2) // Beneficio máximo anual
+  usedBenefit     Decimal  @default(0) @db.Decimal(10,2) // Beneficio usado
+  deductible      Decimal  @default(0) @db.Decimal(10,2) // Deducible
+  copayPercentage Decimal  @default(0) @db.Decimal(5,2) // Porcentaje de copago
+  
+  // Estado
+  status          String   @default("Activa") // Activa, Vencida, Cancelada, Suspendida
+  
+  // Información del titular
+  primaryHolder   Boolean  @default(true) // Si el paciente es el titular principal
+  holderName      String? // Nombre del titular si no es el paciente
+  relationship    String? // Relación con el titular: "Cónyuge", "Hijo", etc.
+  
+  // Información adicional
+  notes           String?  @db.Text
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relaciones
+  patient         Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  insuranceCompany InsuranceCompany @relation(fields: [insuranceCompanyId], references: [id])
+  claims          InsuranceClaim[]  // Reclamos asociados a esta póliza
+  preAuthorizations PreAuthorization[]
+}
+
+model InsuranceCoverage {
+  id                  String   @id @default(cuid())
+  insuranceCompanyId  String
+  
+  // Información de la cobertura
+  treatmentCode       String   // Código del tratamiento (ej: D0120, D1110)
+  treatmentName       String   // Nombre del tratamiento
+  category            String   // Categoría: "Preventivo", "Básico", "Mayor"
+  
+  // Cobertura
+  coveragePercentage  Decimal  @default(0) @db.Decimal(5,2) // Porcentaje cubierto
+  maxAmount           Decimal? @db.Decimal(10,2) // Monto máximo cubierto
+  frequency           String?  // Frecuencia permitida: "6 meses", "1 año", etc.
+  
+  // Restricciones
+  ageRestriction      String? // Restricciones de edad
+  waitingPeriod       Int?    // Período de espera en días
+  requiresAuth        Boolean @default(false) // Requiere preautorización
+  
+  // Estado
+  isActive            Boolean @default(true)
+  effectiveDate       DateTime @default(now())
+  expirationDate      DateTime?
+  
+  // Información adicional
+  notes               String? @db.Text
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  
+  // Relaciones
+  insuranceCompany    InsuranceCompany @relation(fields: [insuranceCompanyId], references: [id], onDelete: Cascade)
+}
+
+model PreAuthorization {
+  id                  String   @id @default(cuid())
+  patientId           String
+  insuranceCompanyId  String
+  patientInsuranceId  String
+  treatmentId         String?  // Tratamiento asociado (opcional)
+  
+  // Información de la preautorización
+  authNumber          String   @unique // Número de autorización
+  treatmentCode       String   // Código del tratamiento
+  treatmentDescription String  // Descripción del tratamiento
+  
+  // Fechas
+  requestDate         DateTime @default(now())
+  approvalDate        DateTime?
+  expirationDate      DateTime?
+  
+  // Montos
+  requestedAmount     Decimal  @db.Decimal(10,2)
+  approvedAmount      Decimal? @db.Decimal(10,2)
+  
+  // Estado
+  status              String   @default("Pendiente") // Pendiente, Aprobada, Denegada, Vencida
+  
+  // Información adicional
+  diagnosis           String? @db.Text
+  notes               String? @db.Text
+  denialReason        String? @db.Text
+  
+  // Información de contacto
+  requestedBy         String   // Usuario que solicita
+  approvedBy          String? // Persona que aprueba en la aseguradora
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  
+  // Relaciones
+  patient             Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  insuranceCompany    InsuranceCompany  @relation(fields: [insuranceCompanyId], references: [id])
+  patientInsurance    PatientInsurance  @relation(fields: [patientInsuranceId], references: [id])
+  treatment           Treatment?        @relation(fields: [treatmentId], references: [id])
+}
+
+model InsuranceClaim {
+  id                  String   @id @default(cuid())
+  claimNumber         String   @unique @default(cuid())
+  patientId           String
+  insuranceCompanyId  String
+  patientInsuranceId  String
+  treatmentId         String   // Tratamiento reclamado
+  
+  // Fechas
+  serviceDate         DateTime // Fecha del servicio
+  claimDate           DateTime @default(now()) // Fecha de envío del reclamo
+  processedDate       DateTime? // Fecha de procesamiento
+  paidDate            DateTime? // Fecha de pago
+  
+  // Montos
+  chargedAmount       Decimal  @db.Decimal(10,2) // Monto cobrado
+  allowedAmount       Decimal? @db.Decimal(10,2) // Monto permitido por la aseguradora
+  paidAmount          Decimal  @default(0) @db.Decimal(10,2) // Monto pagado
+  patientResponsibility Decimal @default(0) @db.Decimal(10,2) // Responsabilidad del paciente
+  
+  // Estado del reclamo
+  status              String   @default("Enviado") // Enviado, Procesando, Pagado, Denegado, Revisión
+  
+  // Información del tratamiento
+  treatmentCode       String   // Código del tratamiento
+  treatmentDescription String  // Descripción
+  diagnosis           String?  @db.Text // Diagnóstico
+  
+  // Información adicional
+  notes               String?  @db.Text
+  denialReason        String?  @db.Text // Razón de denegación si aplica
+  referenceNumber     String? // Número de referencia de la aseguradora
+  
+  // Control de envío
+  submittedBy         String   // Usuario que envía el reclamo
+  submissionMethod    String   @default("Electrónico") // Electrónico, Correo, Fax
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  
+  // Relaciones
+  patient             Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  insuranceCompany    InsuranceCompany  @relation(fields: [insuranceCompanyId], references: [id])
+  patientInsurance    PatientInsurance  @relation(fields: [patientInsuranceId], references: [id])
+  treatment           Treatment         @relation(fields: [treatmentId], references: [id])
+}
+
+// =============================================
+// MÓDULO DE GASTOS
+// =============================================
+
+model ExpenseCategory {
+  id          String   @id @default(cuid())
+  name        String   @unique // Nombre de la categoría
+  description String?  @db.Text
+  code        String?  @unique // Código interno
+  
+  // Configuración de la categoría
+  isActive    Boolean  @default(true)
+  color       String?  // Color para la visualización
+  icon        String?  // Icono para la interfaz
+  
+  // Control de presupuesto
+  monthlyBudget Decimal? @db.Decimal(10,2) // Presupuesto mensual
+  yearlyBudget  Decimal? @db.Decimal(10,2) // Presupuesto anual
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relaciones
+  expenses    Expense[]
+}
+
+model Expense {
+  id              String   @id @default(cuid())
+  expenseNumber   String   @unique @default(cuid())
+  categoryId      String
+  userId          String   // Usuario que registra el gasto
+  
+  // Información del gasto
+  description     String   // Descripción del gasto
+  amount          Decimal  @db.Decimal(10,2) // Monto del gasto
+  taxAmount       Decimal  @default(0) @db.Decimal(10,2) // Impuestos
+  totalAmount     Decimal  @db.Decimal(10,2) // Monto total (amount + taxAmount)
+  
+  // Fechas
+  expenseDate     DateTime @default(now()) // Fecha del gasto
+  dueDate         DateTime? // Fecha de vencimiento (para gastos recurrentes)
+  paidDate        DateTime? // Fecha de pago
+  
+  // Información del proveedor/vendedor
+  vendor          String? // Proveedor o vendedor
+  vendorContact   String? // Contacto del proveedor
+  
+  // Documentos
+  receiptNumber   String? // Número de recibo/factura
+  invoiceNumber   String? // Número de factura
+  receiptUrl      String? // URL del documento escaneado
+  
+  // Método de pago
+  paymentMethod   String   @default("Efectivo") // Efectivo, Tarjeta, Transferencia, Cheque
+  bankAccount     String? // Cuenta bancaria utilizada
+  reference       String? // Referencia del pago
+  
+  // Estado
+  status          String   @default("Pendiente") // Pendiente, Pagado, Vencido, Cancelado
+  
+  // Clasificación fiscal
+  taxDeductible   Boolean  @default(false) // Si es deducible de impuestos
+  taxCategory     String?  // Categoría fiscal
+  
+  // Recurrencia
+  isRecurring     Boolean  @default(false) // Si es un gasto recurrente
+  recurringType   String? // "Mensual", "Trimestral", "Anual"
+  nextDueDate     DateTime? // Próxima fecha de vencimiento
+  
+  // Información adicional
+  notes           String?  @db.Text
+  tags            String? // Tags separados por comas
+  
+  // Control de aprobación
+  requiresApproval Boolean @default(false)
+  isApproved      Boolean  @default(true)
+  approvedBy      String? // Usuario que aprueba
+  approvalDate    DateTime?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relaciones
+  category        ExpenseCategory @relation(fields: [categoryId], references: [id])
+  user            User            @relation("UserExpenses", fields: [userId], references: [id])
+  cashMovements   CashMovement[]  // Movimientos de caja relacionados con este gasto
+}
+
+// =============================================
+// MÓDULO DE REPORTES (extensión de otros modelos)
+// =============================================
+
+model ReportTemplate {
+  id            String   @id @default(cuid())
+  name          String   // Nombre del template
+  type          String   // "financial", "patients", "appointments", "inventory", etc.
+  description   String?  @db.Text
+  
+  // Configuración del reporte
+  parameters    String   @db.Text // JSON con parámetros del reporte
+  filters       String?  @db.Text // JSON con filtros por defecto
+  groupBy       String? // Agrupación por defecto
+  sortBy        String? // Ordenamiento por defecto
+  
+  // Configuración de visualización
+  chartType     String? // "bar", "line", "pie", "table"
+  showChart     Boolean @default(true)
+  showTable     Boolean @default(true)
+  
+  // Configuración de exportación
+  allowExport   Boolean @default(true)
+  exportFormats String[] @default(["PDF", "Excel", "CSV"])
+  
+  // Programación automática
+  isScheduled   Boolean @default(false)
+  scheduleFreq  String? // "daily", "weekly", "monthly"
+  scheduleTime  String? // Hora de ejecución
+  emailTo       String[] @default([]) // Emails para envío automático
+  
+  // Estado
+  isActive      Boolean @default(true)
+  isPublic      Boolean @default(false) // Si está disponible para todos los usuarios
+  
+  createdBy     String? // Usuario creador
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// =============================================
+// MÓDULO DE GESTIÓN PERSONAL
+// =============================================
+
+model Department {
+  id          String   @id @default(cuid())
+  name        String   @unique // Nombre del departamento
+  code        String?  @unique // Código del departamento
+  description String?  @db.Text
+  
+  // Jerarquía
+  parentId    String? // Para departamentos anidados
+  level       Int     @default(1) // Nivel en la jerarquía
+  
+  // Información del responsable
+  managerId   String? // ID del manager/responsable
+  
+  // Configuración
+  isActive    Boolean @default(true)
+  color       String? // Color para visualización
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relaciones
+  parent      Department? @relation("DepartmentHierarchy", fields: [parentId], references: [id])
+  children    Department[] @relation("DepartmentHierarchy")
+  positions   Position[]
+}
+
+model Position {
+  id            String   @id @default(cuid())
+  title         String   // Título del puesto
+  departmentId  String
+  
+  // Descripción del puesto
+  description   String?  @db.Text
+  responsibilities String? @db.Text // Responsabilidades
+  requirements  String?  @db.Text // Requisitos
+  
+  // Configuración salarial
+  minSalary     Decimal? @db.Decimal(10,2)
+  maxSalary     Decimal? @db.Decimal(10,2)
+  salaryType    String   @default("Mensual") // Mensual, Por hora, Comisión
+  
+  // Configuración del puesto
+  level         String   @default("Junior") // Junior, Mid, Senior, Manager, Director
+  isActive      Boolean  @default(true)
+  maxOccupancy  Int      @default(1) // Número máximo de personas en el puesto
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relaciones
+  department    Department @relation(fields: [departmentId], references: [id])
+  staff         StaffMember[]
+}
+
+model StaffMember {
+  id              String   @id @default(cuid())
+  userId          String?  @unique // Referencia al usuario del sistema
+  employeeNumber  String   @unique @default(cuid()) // Número de empleado
+  positionId      String?
+  
+  // === INFORMACIÓN PERSONAL Y DE CONTACTO ===
+  firstName       String
+  lastName        String
+  fullName        String? // Nombre completo concatenado
+  photo           String? // URL de la fotografía
+  birthDate       DateTime? // Fecha de nacimiento
+  age             Int? // Edad calculada
+  gender          String? // Género/Sexo
+  nationality     String? // Nacionalidad
+  
+  // Dirección completa
+  street          String? // Calle y número
+  apartment       String? // Piso/Puerta
+  postalCode      String? // Código postal
+  city            String? // Ciudad
+  state           String? // Provincia/Estado
+  country         String? @default("México")
+  
+  // Contacto
+  phone           String? // Celular
+  landline        String? // Teléfono fijo
+  personalEmail   String? // Correo personal
+  email           String   @unique // Correo de trabajo
+  
+  // === INFORMACIÓN PROFESIONAL Y ACADÉMICA ===
+  position        String? // Puesto en la clínica
+  professionalLicense String? // Cédula profesional (CRÍTICO)
+  licenseDocument String? // URL del documento de cédula
+  
+  // Educación
+  university      String? // Institución educativa
+  degree          String? // Título universitario
+  graduationDate  DateTime? // Fecha de graduación
+  degreeDocument  String? // URL del documento del título
+  specializations String? @db.Text // Especialidades (JSON array)
+  
+  // Certificaciones y cursos
+  certifications  String? @db.Text // Certificaciones (JSON array)
+  
+  // Seguro de responsabilidad civil
+  insuranceNumber String? // Número de póliza
+  insuranceCompany String? // Compañía aseguradora
+  insuranceExpiry DateTime? // Fecha de vigencia
+  
+  // === INFORMACIÓN CONTRACTUAL Y DE NÓMINA ===
+  hireDate        DateTime @default(now()) // Fecha de contratación
+  contractType    String   @default("Indefinido") // Indefinido, Temporal, Honorarios
+  contractDocument String? // URL del contrato firmado
+  
+  // Información salarial
+  baseSalary      Decimal? @db.Decimal(10,2) // Salario base
+  currency        String   @default("MXN")
+  commissionStructure String? @db.Text // Esquema de comisiones (JSON)
+  bonusStructure  String? @db.Text // Esquema de bonos (JSON)
+  
+  // Datos bancarios
+  bankName        String? // Nombre del banco
+  bankAccount     String? // Número de cuenta
+  clabe           String? // CLABE interbancaria
+  
+  // Horario de trabajo
+  workSchedule    String? @db.Text // JSON con horarios por día
+  
+  // Historial laboral interno
+  positionHistory String? @db.Text // JSON con historial de puestos
+  salaryHistory   String? @db.Text // JSON con historial salarial
+  
+  // Terminación
+  endDate         DateTime? // Fecha de baja
+  terminationReason String? // Motivo de baja
+  
+  // === CONTROL DE ACCESO Y SEGURIDAD ===
+  username        String? @unique // Usuario del sistema
+  password        String? // Contraseña hasheada
+  systemRole      String? // Rol en el sistema
+  permissions     String[] @default([]) // Permisos específicos
+  accessLog       String? @db.Text // Bitácora de acceso (JSON)
+  requirePasswordChange Boolean @default(true) // Requerir cambio en primer acceso
+  
+  // === GESTIÓN DE DESEMPEÑO Y CAPACITACIÓN ===
+  trainingRecords String? @db.Text // Registro de capacitaciones (JSON)
+  incidentRecords String? @db.Text // Expediente de incidencias (JSON)
+  
+  // === INFORMACIÓN DE EMERGENCIA ===
+  emergencyContactName String? // Nombre del contacto
+  emergencyRelationship String? // Parentesco
+  emergencyPhone      String? // Teléfono de emergencia
+  bloodType           String? // Tipo de sangre
+  allergies           String? @db.Text // Alergias conocidas
+  chronicConditions  String? @db.Text // Enfermedades crónicas
+  
+  // === INFORMACIÓN ADICIONAL ===
+  status          String   @default("Activo") // Activo, Inactivo, Suspendido, Terminado
+  notes           String?  @db.Text // Notas adicionales
+  
+  // === METADATOS ===
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // === RELACIONES ===
+  user            User?     @relation("UserStaffMember", fields: [userId], references: [id])
+  positionRef     Position? @relation(fields: [positionId], references: [id])
+  evaluations     PerformanceEvaluation[]
+  timeRecords     TimeRecord[]
+  payrollRecords  PayrollRecord[] // Nueva relación para liquidaciones
+  commissions     Commission[] // Nueva relación para comisiones
+  commissionConfig CommissionConfig? // Configuración de comisiones
+}
+
+model PerformanceEvaluation {
+  id              String   @id @default(cuid())
+  staffMemberId   String
+  evaluatorId     String // Usuario que realiza la evaluación
+  
+  // Período de evaluación
+  evaluationPeriod String  // "Q1 2024", "2024", etc.
+  startDate       DateTime
+  endDate         DateTime
+  
+  // Calificaciones (1-5 scale)
+  overallScore    Decimal  @db.Decimal(3,2) // Calificación general
+  technicalSkills Decimal? @db.Decimal(3,2)
+  communication   Decimal? @db.Decimal(3,2)
+  teamwork        Decimal? @db.Decimal(3,2)
+  punctuality     Decimal? @db.Decimal(3,2)
+  initiative      Decimal? @db.Decimal(3,2)
+  
+  // Comentarios
+  strengths       String?  @db.Text // Fortalezas
+  improvements    String?  @db.Text // Áreas de mejora
+  goals           String?  @db.Text // Metas para el siguiente período
+  comments        String?  @db.Text // Comentarios generales
+  
+  // Estado
+  status          String   @default("Borrador") // Borrador, Completada, Aprobada
+  
+  evaluationDate  DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relaciones
+  staffMember     StaffMember @relation(fields: [staffMemberId], references: [id], onDelete: Cascade)
+}
+
+model TimeRecord {
+  id            String   @id @default(cuid())
+  staffMemberId String
+  
+  // Información del registro
+  date          DateTime @default(now())
+  clockIn       DateTime? // Hora de entrada
+  clockOut      DateTime? // Hora de salida
+  breakTime     Int      @default(0) // Minutos de descanso
+  totalHours    Decimal? @db.Decimal(4,2) // Horas totales trabajadas
+  
+  // Tipo de día/registro
+  recordType    String   @default("Regular") // Regular, Overtime, Holiday, Sick, Vacation
+  
+  // Notas y observaciones
+  notes         String?  @db.Text
+  location      String?  // Ubicación del registro
+  
+  // Aprobación
+  isApproved    Boolean  @default(false)
+  approvedBy    String?
+  approvalDate  DateTime?
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relaciones
+  staffMember   StaffMember @relation(fields: [staffMemberId], references: [id], onDelete: Cascade)
+}
+
+
+
+// =============================================
+// MÓDULO DE ÓRDENES DE TRATAMIENTO
+// =============================================
+
+model TreatmentOrderTemplate {
+  id              String   @id @default(cuid())
+  name            String   // Nombre de la plantilla
+  category        String   // Categoría del tratamiento
+  description     String?  @db.Text
+  
+  // Contenido de la plantilla
+  content         String   @db.Text // HTML/Markdown del contenido
+  variables       String?  @db.Text // JSON con variables dinámicas
+  
+  // Configuración
+  isActive        Boolean  @default(true)
+  isDefault       Boolean  @default(false)
+  requiresSignature Boolean @default(true)
+  
+  // Información legal
+  legalDisclaimer String?  @db.Text
+  termsConditions String?  @db.Text
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relaciones
+  treatmentOrders TreatmentOrder[]
+}
+
+model TreatmentOrder {
+  id                    String   @id @default(cuid())
+  orderNumber           String   @unique @default(cuid())
+  
+  // Relaciones principales
+  patientId             String
+  doctorId              String
+  budgetId              String?  // Presupuesto origen
+  treatmentPlanId       String?  // Plan de tratamiento asociado
+  templateId            String?  // Plantilla utilizada
+  
+  // Información del procedimiento
+  procedureType         String   // Tipo de procedimiento
+  procedureDescription  String   @db.Text
+  treatmentDetails      String   @db.Text // Plan de tratamiento detallado
+  
+  // Información médica
+  diagnosis             String?  @db.Text
+  risks                 String?  @db.Text
+  alternatives          String?  @db.Text
+  postOperativeCare     String?  @db.Text
+  expectedOutcome       String?  @db.Text
+  
+  // Costos
+  totalCost             Decimal  @db.Decimal(10,2)
+  paymentTerms          String?  @db.Text
+  
+  // Estado y fechas
+  status                String   @default("Pendiente") // Pendiente, Firmada, Rechazada, En_Proceso, Completada
+  createdDate           DateTime @default(now())
+  scheduledDate         DateTime?
+  completedDate         DateTime?
+  
+  // Firma digital del paciente
+  patientSignature      String?  @db.Text // Base64 de la firma
+  signatureDate         DateTime?
+  signatureIpAddress    String?  // IP desde donde se firmó
+  witnessName           String?  // Testigo si aplica
+  witnessSignature      String?  @db.Text // Base64 de firma del testigo
+  
+  // Token para firma vía portal del paciente
+  signatureToken        String?  // Token único para acceso sin autenticación
+  tokenExpiry           DateTime? // Fecha de expiración del token
+  
+  // Consentimiento informado
+  hasInformedConsent    Boolean  @default(false)
+  consentDetails        String?  @db.Text
+  
+  // Documentación
+  pdfUrl                String?  // URL del PDF generado
+  documentHash          String?  // Hash del documento para verificación
+  
+  // Notas
+  notes                 String?  @db.Text
+  
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  
+  // Relaciones
+  patient               Patient                @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor                User                   @relation("DoctorTreatmentOrders", fields: [doctorId], references: [id])
+  budget                Budget?                @relation(fields: [budgetId], references: [id])
+  treatmentPlan         TreatmentPlan?         @relation("TreatmentPlanOrders", fields: [treatmentPlanId], references: [id])
+  template              TreatmentOrderTemplate? @relation(fields: [templateId], references: [id])
+}
+
+// =============================================
+// NUEVOS MODELOS PARA LIQUIDACIONES AUTOMÁTICAS
+// =============================================
+
+model PayrollRecord {
+  id              String   @id @default(cuid())
+  staffMemberId   String
+  payrollPeriodId String
+  
+  // Información del período
+  startDate       DateTime
+  endDate         DateTime
+  payDate         DateTime? // Fecha de pago
+  
+  // Horas trabajadas
+  regularHours    Decimal  @db.Decimal(8,2) @default(0)
+  overtimeHours   Decimal  @db.Decimal(8,2) @default(0)
+  
+  // Salarios y pagos
+  baseSalaryAmount     Decimal  @db.Decimal(10,2) @default(0)
+  overtimeAmount       Decimal  @db.Decimal(10,2) @default(0)
+  commissionsAmount    Decimal  @db.Decimal(10,2) @default(0)
+  bonusAmount          Decimal  @db.Decimal(10,2) @default(0)
+  
+  // Deducciones
+  taxDeductions        Decimal  @db.Decimal(10,2) @default(0)
+  socialSecurityDeductions Decimal @db.Decimal(10,2) @default(0)
+  otherDeductions      Decimal  @db.Decimal(10,2) @default(0)
+  deductionNotes       String?  @db.Text
+  
+  // Totales
+  grossAmount      Decimal  @db.Decimal(10,2) // Monto bruto
+  netAmount        Decimal  @db.Decimal(10,2) // Monto neto
+  
+  // Estado y procesamiento
+  status           String   @default("Pendiente") // Pendiente, Procesado, Pagado, Cancelado
+  processedAt      DateTime?
+  processedBy      String?
+  
+  // Documentos y notas
+  payslipGenerated Boolean  @default(false)
+  payslipUrl       String?
+  notes            String?  @db.Text
+  
+  // Metadatos
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  
+  // Relaciones
+  staffMember      StaffMember    @relation(fields: [staffMemberId], references: [id], onDelete: Cascade)
+  payrollPeriod    PayrollPeriod  @relation(fields: [payrollPeriodId], references: [id])
+  commissions      Commission[]   @relation("PayrollCommissions")
+  
+  @@unique([staffMemberId, payrollPeriodId])
+}
+
+model PayrollPeriod {
+  id          String   @id @default(cuid())
+  name        String   // "Enero 2024", "Q1 2024", etc.
+  type        String   @default("Mensual") // Mensual, Quincenal, Semanal
+  startDate   DateTime
+  endDate     DateTime
+  payDate     DateTime? // Fecha límite de pago
+  
+  // Estado
+  status      String   @default("Abierto") // Abierto, Cerrado, Procesado
+  closedAt    DateTime?
+  closedBy    String?
+  
+  // Configuración
+  taxRate     Decimal? @db.Decimal(5,4) // Tasa de impuestos
+  ssRate      Decimal? @db.Decimal(5,4) // Tasa seguridad social
+  
+  // Metadatos
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relaciones
+  payrollRecords PayrollRecord[]
+}
+
+model Commission {
+  id              String   @id @default(cuid())
+  staffMemberId   String
+  payrollRecordId String?  // Puede estar asociado a una nómina específica
+  
+  // Información de la comisión
+  type            String   // "Tratamiento", "Venta", "Referido", etc.
+  description     String
+  referenceId     String?  // ID del tratamiento, venta, etc.
+  referenceType   String?  // "Budget", "Treatment", "Sale", etc.
+  
+  // Cálculo de comisión
+  baseAmount      Decimal  @db.Decimal(10,2) // Monto base para el cálculo
+  commissionRate  Decimal  @db.Decimal(5,4)  // Porcentaje de comisión (0.15 = 15%)
+  commissionAmount Decimal @db.Decimal(10,2) // Monto de comisión calculado
+  
+  // Fecha y período
+  serviceDate     DateTime // Fecha del servicio/venta
+  earnedDate      DateTime @default(now()) // Fecha en que se ganó la comisión
+  paymentPeriod   String?  // Período de pago
+  
+  // Estado
+  status          String   @default("Pendiente") // Pendiente, Aprobada, Pagada, Cancelada
+  approvedBy      String?
+  approvedAt      DateTime?
+  paidAt          DateTime?
+  
+  // Notas
+  notes           String?  @db.Text
+  
+  // Metadatos
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relaciones
+  staffMember     StaffMember    @relation(fields: [staffMemberId], references: [id], onDelete: Cascade)
+  payrollRecord   PayrollRecord? @relation("PayrollCommissions", fields: [payrollRecordId], references: [id])
+}
+
+// Modelo para configuración de comisiones por personal
+model CommissionConfig {
+  id              String   @id @default(cuid())
+  staffMemberId   String   @unique
+  
+  // Configuración de tasas de comisión
+  treatmentCommissionRate   Decimal? @db.Decimal(5,4) // Comisión por tratamientos
+  budgetCommissionRate      Decimal? @db.Decimal(5,4) // Comisión por presupuestos aprobados
+  referralCommissionRate    Decimal? @db.Decimal(5,4) // Comisión por referencias
+  
+  // Configuración de pagos
+  minimumAmount   Decimal? @db.Decimal(10,2) // Monto mínimo para generar comisión
+  paymentDelay    Int?     // Días de retraso antes del pago
+  
+  // Estado
+  isActive        Boolean  @default(true)
+  
+  // Metadatos
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relación
+  staffMember     StaffMember @relation(fields: [staffMemberId], references: [id], onDelete: Cascade)
+}
+
+// Modelo para reportes automatizados de liquidaciones
+model PayrollReport {
+  id              String   @id @default(cuid())
+  name            String   // Nombre del reporte
+  type            String   // "Individual", "Departamento", "General"
+  
+  // Configuración del reporte
+  staffMemberId   String?  // Para reportes individuales
+  departmentId    String?  // Para reportes por departamento
+  startDate       DateTime
+  endDate         DateTime
+  
+  // Parámetros del reporte
+  includeSalary   Boolean  @default(true)
+  includeCommissions Boolean @default(true)
+  includeBonuses  Boolean  @default(true)
+  includeDeductions Boolean @default(true)
+  includeHours    Boolean  @default(true)
+  
+  // Estado y generación
+  status          String   @default("Pendiente") // Pendiente, Generando, Completado, Error
+  fileUrl         String?  // URL del archivo generado
+  fileFormat      String   @default("PDF") // PDF, Excel, CSV
+  
+  // Metadatos
+  generatedAt     DateTime?
+  generatedBy     String?  // Usuario que generó el reporte
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// =============================================
+// MÓDULO DE FINANCIAMIENTO
+// =============================================
+
+// Plan de financiamiento para tratamientos
+model FinancingPlan {
+  id                String   @id @default(cuid())
+  planNumber        String   @unique @default(cuid())
+  
+  // Relaciones
+  patientId         String
+  doctorId          String   // Doctor que crea el plan
+  budgetId          String?  @unique // Presupuesto asociado (opcional)
+  treatmentPlanId   String?  // Plan de tratamiento asociado (opcional)
+  
+  // Información del plan
+  title             String   // Título del plan de financiamiento
+  description       String?  @db.Text
+  
+  // Montos principales
+  totalAmount       Decimal  @db.Decimal(12,2) // Monto total a financiar
+  downPayment       Decimal  @default(0) @db.Decimal(12,2) // Enganche/pago inicial
+  financedAmount    Decimal  @db.Decimal(12,2) // Monto financiado (total - enganche)
+  
+  // Configuración del financiamiento
+  numberOfPayments  Int      // Número de cuotas
+  paymentFrequency  String   @default("Mensual") // Mensual, Quincenal, Semanal
+  interestRate      Decimal  @default(0) @db.Decimal(5,4) // Tasa de interés anual
+  paymentAmount     Decimal  @db.Decimal(12,2) // Monto de cada cuota
+  
+  // Fechas importantes
+  startDate         DateTime @default(now()) // Fecha de inicio del plan
+  firstPaymentDate  DateTime // Fecha del primer pago
+  finalPaymentDate  DateTime // Fecha del último pago
+  
+  // Estado del plan
+  status            String   @default("Pendiente") // Pendiente, Activo, Completado, Cancelado, Vencido
+  approvalStatus    String   @default("Por_Aprobar") // Por_Aprobar, Aprobado, Rechazado
+  
+  // Información adicional
+  notes             String?  @db.Text
+  terms             String?  @db.Text // Términos y condiciones
+  
+  // Firmas digitales
+  patientSignature  String?  @db.Text // Base64 de la firma del paciente
+  doctorSignature   String?  @db.Text // Base64 de la firma del doctor
+  signatureDate     DateTime?
+  
+  // Información del aval/garantía (opcional)
+  guarantorName     String?
+  guarantorPhone    String?
+  guarantorEmail    String?
+  guarantorAddress  String?  @db.Text
+  
+  // Configuración de pagos
+  allowPartialPayments Boolean @default(true)
+  gracePeriodDays   Int      @default(5) // Días de gracia para pagos
+  lateFee           Decimal  @default(0) @db.Decimal(10,2) // Recargo por mora
+  
+  // Control de notificaciones
+  notifyBeforeDue   Boolean  @default(true)
+  notifyDaysBefore  Int      @default(3) // Días antes del vencimiento para notificar
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  // Relaciones
+  patient           Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor            User              @relation("DoctorFinancingPlans", fields: [doctorId], references: [id])
+  budget            Budget?           @relation(fields: [budgetId], references: [id])
+  payments          FinancingPayment[]
+  delinquencyNotifications DelinquencyNotification[]
+  
+  @@index([patientId])
+  @@index([doctorId])
+  @@index([status])
+}
+
+// Pagos del plan de financiamiento
+model FinancingPayment {
+  id                String   @id @default(cuid())
+  financingPlanId   String
+  
+  // Información del pago
+  paymentNumber     Int      // Número de cuota
+  scheduledAmount   Decimal  @db.Decimal(12,2) // Monto programado
+  paidAmount        Decimal  @default(0) @db.Decimal(12,2) // Monto pagado
+  remainingAmount   Decimal  @db.Decimal(12,2) // Monto pendiente
+  
+  // Fechas
+  dueDate           DateTime // Fecha de vencimiento
+  paymentDate       DateTime? // Fecha real de pago
+  
+  // Estado del pago
+  status            String   @default("Pendiente") // Pendiente, Pagado, Parcial, Vencido, Cancelado
+  
+  // Información del pago
+  paymentMethod     String?  // Efectivo, Tarjeta, Transferencia, etc.
+  reference         String?  // Número de referencia del pago
+  notes             String?  @db.Text
+  
+  // Cargos adicionales
+  lateFee           Decimal  @default(0) @db.Decimal(10,2) // Recargo por mora
+  discountAmount    Decimal  @default(0) @db.Decimal(10,2) // Descuento aplicado
+  
+  // Información de procesamiento
+  processedBy       String?  // Usuario que procesó el pago
+  processedAt       DateTime?
+  
+  // Comprobantes
+  receiptNumber     String?  // Número de recibo
+  invoiceId         String?  // Factura relacionada (opcional)
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  // Relaciones
+  financingPlan     FinancingPlan @relation(fields: [financingPlanId], references: [id], onDelete: Cascade)
+  delinquencyNotifications DelinquencyNotification[]
+  
+  @@index([financingPlanId])
+  @@index([dueDate])
+  @@index([status])
+}
+
+// =============================================
+// MÓDULO DE MOROSIDAD Y NOTIFICACIONES
+// =============================================
+
+model DelinquencyNotification {
+  id                String   @id @default(cuid())
+  
+  // Relaciones
+  patientId         String
+  financingPlanId   String?
+  financingPaymentId String?
+  invoiceId         String?   // Para facturas vencidas
+  
+  // Información de la morosidad
+  type              String   // "payment_overdue", "invoice_overdue", "payment_reminder", "final_notice"
+  title             String   // Título de la notificación
+  description       String   @db.Text
+  
+  // Montos
+  originalAmount    Decimal  @db.Decimal(12,2) // Monto original
+  overdueAmount     Decimal  @db.Decimal(12,2) // Monto en mora
+  lateFeeAmount     Decimal  @default(0) @db.Decimal(10,2) // Recargos por mora
+  totalOwed         Decimal  @db.Decimal(12,2) // Total adeudado
+  
+  // Fechas importantes
+  originalDueDate   DateTime // Fecha original de vencimiento
+  daysOverdue       Int      // Días de mora
+  nextActionDate    DateTime? // Próxima fecha de acción
+  
+  // Estado y prioridad
+  status            String   @default("Pendiente") // Pendiente, Enviado, Visto, Resuelto, Cancelado
+  priority          String   @default("Media") // Baja, Media, Alta, Crítica
+  
+  // Información de notificación
+  notificationMethod String?  // email, sms, whatsapp, llamada, presencial
+  sentAt            DateTime?
+  viewedAt          DateTime?
+  resolvedAt        DateTime?
+  
+  // Acciones tomadas
+  actionsTaken      String[] @default([]) // Array de acciones realizadas
+  notes             String?  @db.Text
+  
+  // Información de seguimiento
+  assignedTo        String?  // Usuario asignado al seguimiento
+  followUpDate      DateTime? // Fecha de próximo seguimiento
+  
+  // Configuración automática
+  autoGenerated     Boolean  @default(true) // Si fue generada automáticamente
+  autoSend          Boolean  @default(false) // Si se envió automáticamente
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  // Relaciones
+  patient           Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  financingPlan     FinancingPlan?    @relation(fields: [financingPlanId], references: [id])
+  financingPayment  FinancingPayment? @relation(fields: [financingPaymentId], references: [id])
+  invoice           Invoice?          @relation(fields: [invoiceId], references: [id])
+  assignedUser      User?             @relation("AssignedDelinquencyNotifications", fields: [assignedTo], references: [id])
+  actions           DelinquencyAction[]
+  
+  @@index([patientId])
+  @@index([status])
+  @@index([priority])
+  @@index([originalDueDate])
+  @@index([assignedTo])
+}
+
+// Configuración del sistema de morosidad
+model DelinquencySettings {
+  id                String   @id @default(cuid())
+  
+  // Configuración de días para notificaciones
+  reminderDaysBefore Int     @default(3) // Días antes del vencimiento
+  firstNoticeDays   Int      @default(1) // Días después del vencimiento - primer aviso
+  secondNoticeDays  Int      @default(7) // Días después - segundo aviso
+  finalNoticeDays   Int      @default(15) // Días después - aviso final
+  legalNoticeDays   Int      @default(30) // Días después - aviso legal
+  
+  // Configuración de recargos
+  enableLateFees    Boolean  @default(true)
+  lateFeeType       String   @default("fixed") // fixed, percentage
+  lateFeeAmount     Decimal  @default(50) @db.Decimal(10,2) // Monto fijo o porcentaje
+  lateFeeFrequency  String   @default("once") // once, monthly, daily
+  
+  // Configuración de notificaciones automáticas
+  autoSendReminders Boolean  @default(true)
+  autoSendNotices   Boolean  @default(false) // Requiere aprobación manual por defecto
+  
+  // Métodos de notificación habilitados
+  enableEmail       Boolean  @default(true)
+  enableSMS         Boolean  @default(false)
+  enableWhatsApp    Boolean  @default(false)
+  enablePhone       Boolean  @default(true)
+  
+  // Plantillas de mensajes
+  reminderTemplate  String?  @db.Text
+  firstNoticeTemplate String? @db.Text
+  secondNoticeTemplate String? @db.Text
+  finalNoticeTemplate String? @db.Text
+  
+  // Información de contacto de la clínica
+  clinicPhone       String?
+  clinicEmail       String?
+  clinicAddress     String?  @db.Text
+  
+  // Horarios de contacto
+  contactHoursStart String   @default("08:00")
+  contactHoursEnd   String   @default("18:00")
+  contactDays       String[] @default(["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"])
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+// Historial de acciones de morosidad
+model DelinquencyAction {
+  id                String   @id @default(cuid())
+  
+  // Relaciones
+  notificationId    String
+  userId            String   // Usuario que realiza la acción
+  patientId         String
+  
+  // Información de la acción
+  actionType        String   // "call", "email", "sms", "meeting", "payment_plan", "legal_action"
+  description       String   @db.Text
+  outcome           String?  // Resultado de la acción
+  
+  // Detalles adicionales
+  contactMethod     String?  // Método de contacto utilizado
+  duration          Int?     // Duración en minutos (para llamadas/reuniones)
+  nextSteps         String?  @db.Text
+  
+  // Programación de seguimiento
+  followUpRequired  Boolean  @default(false)
+  followUpDate      DateTime?
+  followUpNotes     String?  @db.Text
+  
+  // Archivos adjuntos
+  attachments       String[] @default([]) // URLs de archivos adjuntos
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  // Relaciones
+  notification      DelinquencyNotification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user              User                    @relation("UserDelinquencyActions", fields: [userId], references: [id])
+  patient           Patient                 @relation(fields: [patientId], references: [id])
+  
+  @@index([notificationId])
+  @@index([userId])
+  @@index([patientId])
+  @@index([actionType])
+}
+
+// Plantillas de planes de financiamiento
+model FinancingTemplate {
+  id                String   @id @default(cuid())
+  name              String   // Nombre de la plantilla
+  description       String?  @db.Text
+  
+  // Configuración por defecto
+  defaultInterestRate     Decimal  @default(0) @db.Decimal(5,4)
+  defaultNumberOfPayments Int      @default(12)
+  defaultPaymentFrequency String   @default("Mensual")
+  defaultDownPaymentPercent Decimal @default(0) @db.Decimal(5,2)
+  
+  // Configuración de términos
+  terms             String?  @db.Text
+  requiresApproval  Boolean  @default(true)
+  requiresGuarantor Boolean  @default(false)
+  
+  // Configuración de pagos
+  gracePeriodDays   Int      @default(5)
+  lateFeePercent    Decimal  @default(0) @db.Decimal(5,2)
+  
+  // Estado
+  isActive          Boolean  @default(true)
+  isDefault         Boolean  @default(false)
+  
+  // Restricciones
+  minAmount         Decimal?  @db.Decimal(12,2) // Monto mínimo para usar esta plantilla
+  maxAmount         Decimal?  @db.Decimal(12,2) // Monto máximo para usar esta plantilla
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+// =============================================
+// MÓDULO DE CONTROL DE CAJA
+// =============================================
+
+// Modelo para cajas
+model CashRegister {
+  id               String   @id @default(cuid())
+  name             String   // "Caja Principal", "Caja Sucursal A", etc.
+  description      String?
+  initialAmount    Decimal  @db.Decimal(10,2) @default(0)
+  currentBalance   Decimal  @db.Decimal(10,2) @default(0)
+  isActive         Boolean  @default(true)
+  location         String?  // Ubicación física de la caja
+  responsibleUser  String?  // Usuario responsable
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relaciones
+  movements        CashMovement[]
+  sessions         CashSession[]
+  responsible      User?    @relation("ResponsibleCashRegister", fields: [responsibleUser], references: [id])
+
+  @@index([isActive])
+}
+
+// Modelo para movimientos de caja
+model CashMovement {
+  id               String   @id @default(cuid())
+  cashRegisterId   String
+  sessionId        String?
+  type             String   // INGRESO, EGRESO
+  category         String   // PAGO_PACIENTE, VENTA_PRODUCTO, GASTO_OPERATIVO, COMPRA_MATERIAL, etc.
+  amount           Decimal  @db.Decimal(10,2)
+  paymentMethod    String   @default("EFECTIVO") // EFECTIVO, TARJETA, TRANSFERENCIA, CHEQUE
+  description      String   @db.Text
+  reference        String?  // Número de factura, comprobante, etc.
+  
+  // Relaciones opcionales con otros modelos
+  patientId        String?
+  invoiceId        String?
+  expenseId        String?
+  userId           String   // Usuario que registra el movimiento
+  
+  // Información adicional
+  documentType     String?  // FACTURA, RECIBO, COMPROBANTE, etc.
+  documentNumber   String?
+  exchangeRate     Decimal? @db.Decimal(10,4) // Para moneda extranjera
+  originalAmount   Decimal? @db.Decimal(10,2) // Monto original en moneda extranjera
+  currency         String   @default("MXN")
+  
+  // Fechas
+  movementDate     DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relaciones
+  cashRegister     CashRegister     @relation(fields: [cashRegisterId], references: [id])
+  session          CashSession?     @relation(fields: [sessionId], references: [id])
+  patient          Patient?         @relation(fields: [patientId], references: [id])
+  invoice          Invoice?         @relation(fields: [invoiceId], references: [id])
+  expense          Expense?         @relation(fields: [expenseId], references: [id])
+  user             User             @relation("UserCashMovements", fields: [userId], references: [id])
+  payments         Payment[]        // Pagos asociados a este movimiento
+
+  @@index([cashRegisterId])
+  @@index([sessionId])
+  @@index([type])
+  @@index([movementDate])
+}
+
+// Modelo para sesiones/arqueos de caja
+model CashSession {
+  id               String   @id @default(cuid())
+  cashRegisterId   String
+  userId           String   // Usuario que abre/cierra la sesión
+  sessionNumber    String   // Número consecutivo de sesión
+  
+  // Montos
+  openingBalance   Decimal  @db.Decimal(10,2)
+  expectedClosing  Decimal  @db.Decimal(10,2) // Balance esperado
+  actualClosing    Decimal? @db.Decimal(10,2) // Balance real contado
+  difference       Decimal? @db.Decimal(10,2) // Diferencia (faltante/sobrante)
+  
+  // Totales del día
+  totalIncome      Decimal  @db.Decimal(10,2) @default(0)
+  totalExpense     Decimal  @db.Decimal(10,2) @default(0)
+  
+  // Información de fechas
+  openedAt         DateTime @default(now())
+  closedAt         DateTime?
+  workingDate      DateTime // Fecha de trabajo (puede diferir de openedAt)
+  
+  // Estado
+  status           String   @default("ABIERTA") // ABIERTA, CERRADA, CANCELADA
+  
+  // Información adicional del arqueo
+  notes            String?  @db.Text
+  discrepancyNotes String?  @db.Text // Notas sobre diferencias
+  
+  // Denominaciones (JSON)
+  denominations    String?  @db.Text // JSON con conteo de billetes y monedas
+  
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relaciones
+  cashRegister     CashRegister @relation(fields: [cashRegisterId], references: [id])
+  user             User         @relation("UserCashSessions", fields: [userId], references: [id])
+  movements        CashMovement[]
+
+  @@unique([cashRegisterId, sessionNumber])
+  @@index([workingDate])
+  @@index([status])
+}
+
+// Modelo para categorías de movimientos de caja
+model CashCategory {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  type        String   // INGRESO, EGRESO
+  description String?
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([type, isActive])
+}
+
+// Modelos para WhatsApp Integration
+model WhatsAppConfig {
+  id               String   @id @default(cuid())
+  instanceName     String   @unique
+  isConnected      Boolean  @default(false)
+  connectionStatus String   @default("DISCONNECTED") // DISCONNECTED, CONNECTING, CONNECTED
+  qrCode           String?
+  phoneNumber      String?
+  profilePicture   String?
+  lastConnectionAt DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  messages WhatsAppMessage[]
+  
+  @@map("whatsapp_config")
+}
+
+model WhatsAppMessage {
+  id             String   @id @default(cuid())
+  instanceName   String
+  patientId      String?
+  appointmentId  String?
+  messageType    String   // REMINDER, NOTIFICATION, PROMOTION, MANUAL
+  phoneNumber    String
+  message        String   @db.Text
+  status         String   @default("PENDING") // PENDING, SENT, DELIVERED, READ, FAILED
+  error          String?  @db.Text
+  sentAt         DateTime?
+  deliveredAt    DateTime?
+  readAt         DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  patient     Patient?     @relation(fields: [patientId], references: [id])
+  appointment Appointment? @relation(fields: [appointmentId], references: [id])
+  config      WhatsAppConfig @relation(fields: [instanceName], references: [instanceName])
+
+  @@index([instanceName])
+  @@index([patientId])
+  @@index([status])
+  @@index([messageType])
+  @@map("whatsapp_messages")
+}
+
+model WhatsAppTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  type        String   // REMINDER, NOTIFICATION, PROMOTION
+  message     String   @db.Text
+  variables   Json?    // Variables dinámicas como {patientName}, {date}, etc.
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([name, type])
+  @@map("whatsapp_templates")
+}
+
+model Odontograma {
+  id                    String   @id @default(cuid())
+  patientId             String
+  datos                 String   @db.Text // JSON string con datos de dientes
+  tratamientosSugeridos String?  @db.Text // JSON string con tratamientos sugeridos
+  notas                 String?  @db.Text
+  fecha                 DateTime @default(now())
+  doctor                String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  // Relaciones
+  patient               Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@map("odontogramas")
+}
+
+// =============================================
+// BILLING AND SUBSCRIPTION MODELS
+// =============================================
+
+model StripeSubscription {
+  id                    String   @id @default(cuid())
+  organizationId        String   @unique // Una organización solo puede tener una suscripción activa
+  stripeSubscriptionId  String   @unique // ID de la suscripción en Stripe
+  stripeCustomerId      String   // Customer ID en Stripe
+  stripePriceId         String   // Price ID del plan activo
+  status                String   // active, canceled, incomplete, incomplete_expired, past_due, trialing, unpaid
+  currentPeriodStart    DateTime // Inicio del período actual de facturación
+  currentPeriodEnd      DateTime // Fin del período actual de facturación
+  canceledAt            DateTime? // Cuándo se canceló la suscripción
+  cancelAtPeriodEnd     Boolean  @default(false) // Si se cancelará al final del período
+  trialStart            DateTime? // Inicio del trial
+  trialEnd              DateTime? // Fin del trial
+  
+  // Información del plan
+  planType              String   // basic, pro, enterprise
+  billingCycle          String   // monthly, yearly
+  amount                Int      // Cantidad en centavos
+  currency              String   @default("usd")
+  
+  // Metadata
+  metadata              Json?    // Información adicional de Stripe
+  
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  
+  // Relaciones
+  organization          Organization @relation("OrganizationSubscription", fields: [organizationId], references: [id], onDelete: Cascade)
+  payments              StripePayment[] @relation("SubscriptionPayments")
+  invoices              StripeInvoice[] @relation("SubscriptionInvoices")
+  
+  @@index([stripeSubscriptionId])
+  @@index([organizationId])
+  @@map("stripe_subscriptions")
+}
+
+model StripePayment {
+  id                    String   @id @default(cuid())
+  organizationId        String
+  subscriptionId        String?  // Relacionado con suscripción
+  stripePaymentIntentId String   @unique // Payment Intent ID en Stripe
+  stripeChargeId        String?  @unique // Charge ID en Stripe
+  amount                Int      // Cantidad en centavos
+  currency              String   @default("usd")
+  status                String   // succeeded, pending, failed, canceled, requires_action, etc.
+  paymentMethod         String?  // Tipo de método de pago (card, etc.)
+  paymentMethodLast4    String?  // Últimos 4 dígitos de la tarjeta
+  paymentMethodBrand    String?  // Marca de la tarjeta (visa, mastercard, etc.)
+  
+  // Información de la factura
+  stripeInvoiceId       String?  // Invoice ID en Stripe
+  description           String?
+  
+  // Fechas
+  paidAt                DateTime?
+  failedAt              DateTime?
+  
+  // Metadata
+  metadata              Json?    // Información adicional de Stripe
+  
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  
+  // Relaciones
+  subscription          StripeSubscription? @relation("SubscriptionPayments", fields: [subscriptionId], references: [id])
+  
+  @@index([stripePaymentIntentId])
+  @@index([organizationId])
+  @@map("stripe_payments")
+}
+
+model StripeInvoice {
+  id                    String   @id @default(cuid())
+  organizationId        String
+  subscriptionId        String?  // Relacionado con suscripción
+  stripeInvoiceId       String   @unique // Invoice ID en Stripe
+  stripeCustomerId      String   // Customer ID en Stripe
+  amount                Int      // Cantidad en centavos
+  amountDue             Int      // Cantidad pendiente en centavos
+  amountPaid            Int      // Cantidad pagada en centavos
+  currency              String   @default("usd")
+  status                String   // draft, open, paid, uncollectible, void
+  
+  // Información del período
+  periodStart           DateTime
+  periodEnd             DateTime
+  
+  // URLs
+  hostedInvoiceUrl      String?  // URL de la factura para el cliente
+  invoicePdf            String?  // URL del PDF de la factura
+  
+  // Fechas importantes
+  dueDate               DateTime?
+  paidAt                DateTime?
+  voidedAt              DateTime?
+  
+  // Metadata
+  metadata              Json?    // Información adicional de Stripe
+  
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  
+  // Relaciones
+  subscription          StripeSubscription? @relation("SubscriptionInvoices", fields: [subscriptionId], references: [id])
+  
+  @@index([stripeInvoiceId])
+  @@index([organizationId])
+  @@map("stripe_invoices")
+}
